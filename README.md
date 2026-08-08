@@ -19,8 +19,15 @@ the new backend is a config change:
 API_URL=https://mywf-changeover.vercel.app/api
 ```
 
-The Vercel project `mywf-changeover` builds `api/` (root directory `api`) on every push to `main`.
-`web/` has no Vercel project in this repo yet.
+Two Vercel projects build from this repo on every push to `main`:
+
+| Project | Root directory | URL |
+| --- | --- | --- |
+| `mywf-changeover` | `api` | <https://mywf-changeover.vercel.app> |
+| `mywf-changeover-web` | `web` | <https://mywf-changeover-web.vercel.app> |
+
+`api/src/proxy.ts` allows browser calls from localhost, `*.vercel.app`, and the
+`*.wildflowerschools.org` hosts, matching the Rails rack-cors config it replaces.
 
 ## Backend port status
 
@@ -39,19 +46,28 @@ data-only copy rather than a transformation:
 ```bash
 RAILS_DATABASE_URL=postgres://…  # legacy DB, read-only access is enough
 SUPABASE_DB_URL=postgresql://…   # target Supabase DB
-./scripts/import_from_rails.sh --dry-run   # dump only, inspect first
-./scripts/import_from_rails.sh             # dump, load, reset sequences, print row counts
-node --env-file=api/.env.local scripts/invite_users.mjs   # add --invite to email invitations
+./scripts/import_from_rails.sh --dry-run          # dump only, inspect first
+./scripts/import_from_rails.sh --fresh           # truncate target, load, reset sequences
+cd api && node --env-file=.env.local scripts/invite_users.mjs --admins-only
 ```
 
 Caveats:
 
 - Devise's bcrypt hashes are not usable by Supabase Auth, so passwords do not carry over.
-  `invite_users.mjs` creates an Auth user per legacy `users` row, links it through
-  `people.user_id`, and carries `is_admin`; people then set a password via invite or reset.
+  `api/scripts/invite_users.mjs` creates an Auth user per selected legacy `users` row, links it
+  through `people.user_id`, and carries `is_admin`; people then set a password via invite or
+  reset. Staging has ~50k user rows, so it requires an explicit `--admins-only`, `--emails`, or
+  `--limit` selection rather than migrating everyone at once.
+- `--fresh` is needed on any re-import: ids and `people.email` collide otherwise. It truncates
+  `public` only, so existing Supabase Auth users survive and just need relinking by rerunning
+  `invite_users.mjs`.
+- `pg_dump` must match the source's major version (staging is PostgreSQL 15) — Ubuntu's default
+  client 14 refuses to dump it.
 - `good_jobs*` (queue state) and `active_storage_*` (file attachments) are skipped. Attachments
   need a separate copy into Supabase Storage once documents are ported.
-- The load runs in one transaction, so a failure leaves the target untouched.
+- The load runs in one transaction with `session_replication_role = replica`, so a failure leaves
+  the target untouched and imported timestamps are not rewritten by the `touch_updated_at`
+  triggers.
 
 ## Running locally
 

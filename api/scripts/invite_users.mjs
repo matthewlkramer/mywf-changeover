@@ -6,8 +6,13 @@
  * password: pass --invite to send Supabase invite emails, or leave it off and
  * have people use password reset.
  *
+ * Legacy staging holds ~50k user rows, so default to nothing and require an
+ * explicit selection: --admins-only, --emails, or --limit.
+ *
  * Usage:
- *   node --env-file=api/.env.local scripts/invite_users.mjs [--invite] [--limit N]
+ *   node --env-file=api/.env.local scripts/invite_users.mjs --admins-only
+ *   node --env-file=api/.env.local scripts/invite_users.mjs --emails a@x.org,b@x.org
+ *   node --env-file=api/.env.local scripts/invite_users.mjs --limit 100 [--invite]
  */
 import { createClient } from "@supabase/supabase-js";
 
@@ -18,8 +23,22 @@ if (!url || !serviceRoleKey) {
 }
 
 const invite = process.argv.includes("--invite");
-const limitFlag = process.argv.indexOf("--limit");
-const limit = limitFlag === -1 ? null : Number(process.argv[limitFlag + 1]);
+const adminsOnly = process.argv.includes("--admins-only");
+
+function flagValue(name) {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? null : process.argv[index + 1];
+}
+
+const limit = flagValue("--limit") ? Number(flagValue("--limit")) : null;
+const emails = flagValue("--emails")
+  ?.split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+
+if (!adminsOnly && !emails && !limit) {
+  throw new Error("pass one of --admins-only, --emails <list>, or --limit <n>");
+}
 
 const db = createClient(url, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -44,6 +63,8 @@ let query = db
   .select("email, person_id, is_admin")
   .is("deleted_at", null)
   .order("email");
+if (adminsOnly) query = query.eq("is_admin", true);
+if (emails) query = query.in("email", emails);
 if (limit) query = query.limit(limit);
 
 const { data: legacyUsers, error: usersError } = await query;

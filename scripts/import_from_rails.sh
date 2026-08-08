@@ -15,9 +15,25 @@
 # Usage:
 #   RAILS_DATABASE_URL=postgres://...            # source, read-only is enough
 #   SUPABASE_DB_URL=postgresql://postgres...     # target
-#   ./scripts/import_from_rails.sh [--dry-run]
+#   ./scripts/import_from_rails.sh [--dry-run] [--fresh]
+#
+#   --dry-run  dump only, do not touch the target
+#   --fresh    truncate the target's tables first, required whenever the target
+#              already holds rows since ids and unique emails collide
+#
+# Needs a pg_dump matching the source server's major version.
 #
 set -euo pipefail
+
+dry_run=false
+fresh=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dry_run=true ;;
+    --fresh) fresh=true ;;
+    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
 
 : "${RAILS_DATABASE_URL:?set RAILS_DATABASE_URL to the legacy Rails database}"
 : "${SUPABASE_DB_URL:?set SUPABASE_DB_URL to the target Supabase database}"
@@ -27,8 +43,10 @@ DUMP_FILE="$DUMP_DIR/data.sql"
 mkdir -p "$DUMP_DIR"
 
 # Load order matters only for the foreign keys the Rails schema actually
-# declares; everything else is unconstrained, so a single transaction with
-# triggers disabled is enough.
+# declares, so the load runs with session_replication_role = replica: it defers
+# nothing but skips FK checks and the touch_updated_at triggers, which would
+# otherwise overwrite the imported timestamps. pg_dump's own --disable-triggers
+# is not usable here because Supabase's postgres role is not a superuser.
 EXCLUDED_TABLES=(
   good_jobs
   good_job_batches
@@ -52,20 +70,47 @@ pg_dump "$RAILS_DATABASE_URL" \
   --data-only \
   --no-owner \
   --no-privileges \
-  --disable-triggers \
   --schema=public \
   "${exclude_args[@]}" \
   --file "$DUMP_FILE"
 
+# pg_dump's table exclusions do not cover the owned sequences, so the dump still
+# carries a setval() for every skipped table's id sequence, which aborts the load
+# because those sequences do not exist in the target.
+for table in "${EXCLUDED_TABLES[@]}"; do
+  sed -i "/setval('public\.${table}_id_seq'/d" "$DUMP_FILE"
+done
+
 echo "==> Dump written to $DUMP_FILE ($(du -h "$DUMP_FILE" | cut -f1))"
 
-if [[ "${1:-}" == "--dry-run" ]]; then
+if [[ "$dry_run" == true ]]; then
   echo "==> Dry run: not loading into Supabase"
   exit 0
 fi
 
+if [[ "$fresh" == true ]]; then
+  echo "==> Truncating the target's tables"
+  psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+DECLARE
+  tables text;
+BEGIN
+  SELECT string_agg(quote_ident(table_name), ', ')
+  INTO tables
+  FROM information_schema.tables
+  WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+
+  IF tables IS NOT NULL THEN
+    EXECUTE format('TRUNCATE TABLE %s RESTART IDENTITY CASCADE', tables);
+  END IF;
+END $$;
+SQL
+fi
+
 echo "==> Loading into Supabase (single transaction)"
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$DUMP_FILE"
+psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction \
+  -c "SET session_replication_role = replica" \
+  -f "$DUMP_FILE"
 
 echo "==> Resetting sequences to the max id of each table"
 psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
