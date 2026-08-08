@@ -31,6 +31,28 @@ Remaining: workflow engine (`workflow_definition_*` / `workflow_instance_*`), ad
 endpoints, documents + file storage, Airtable sync, and Slack notification jobs. Each has its Rails
 source under `legacy/rails-api/app/` to port from.
 
+## Importing the legacy data
+
+`api/supabase/migrations/0001` is a direct port of the Rails schema, so switching over is a
+data-only copy rather than a transformation:
+
+```bash
+RAILS_DATABASE_URL=postgres://…  # legacy DB, read-only access is enough
+SUPABASE_DB_URL=postgresql://…   # target Supabase DB
+./scripts/import_from_rails.sh --dry-run   # dump only, inspect first
+./scripts/import_from_rails.sh             # dump, load, reset sequences, print row counts
+node --env-file=api/.env.local scripts/invite_users.mjs   # add --invite to email invitations
+```
+
+Caveats:
+
+- Devise's bcrypt hashes are not usable by Supabase Auth, so passwords do not carry over.
+  `invite_users.mjs` creates an Auth user per legacy `users` row, links it through
+  `people.user_id`, and carries `is_admin`; people then set a password via invite or reset.
+- `good_jobs*` (queue state) and `active_storage_*` (file attachments) are skipped. Attachments
+  need a separate copy into Supabase Storage once documents are ported.
+- The load runs in one transaction, so a failure leaves the target untouched.
+
 ## Running locally
 
 ```bash

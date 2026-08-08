@@ -8,3 +8,6 @@ out/
 !web/.env
 *.log
 .DS_Store
+.vercel
+.env*
+tmp/
