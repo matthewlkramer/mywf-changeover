@@ -1,9 +1,8 @@
-# wildflower-platform-next
+# api
 
-TypeScript/Supabase reimplementation of the Rails
-[wildflower-platform](https://github.com/matthewlkramer/wildflower-platform) API, deployable on
-Vercel. The existing [wildflower-journey-ui](https://github.com/keithtom/wildflower-journey-ui)
-frontend can point at it by setting `API_URL` to this app's origin plus `/api`.
+TypeScript/Supabase reimplementation of the Rails platform API (kept for reference at
+`../legacy/rails-api`), deployed on Vercel at <https://mywf-changeover.vercel.app>. The frontend in
+`../web` points at it by setting `API_URL` to this app's origin plus `/api`.
 
 ## Status
 

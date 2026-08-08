@@ -6,7 +6,7 @@ the port can proceed incrementally.
 
 | Directory | What it is | Origin |
 | --- | --- | --- |
-| `api/` | New backend: Next.js route handlers on Supabase, reimplementing the Rails `/v1` JSON API. Deployed. | written for this changeover |
+| `api/` | New backend: Next.js route handlers on Supabase, reimplementing the Rails `/v1` JSON API. Deployed from this directory to <https://mywf-changeover.vercel.app>. | written for this changeover |
 | `web/` | Existing frontend (Next.js 14, MUI, SWR). Unchanged; already JS, already deploys on Vercel. | [keithtom/wildflower-journey-ui](https://github.com/keithtom/wildflower-journey-ui) |
 | `legacy/rails-api/` | The Rails 7 API being replaced. Reference only — not deployed from here. | [matthewlkramer/wildflower-platform](https://github.com/matthewlkramer/wildflower-platform) |
 
@@ -16,8 +16,11 @@ the port can proceed incrementally.
 the new backend is a config change:
 
 ```
-API_URL=https://wildflower-platform-next.vercel.app/api
+API_URL=https://mywf-changeover.vercel.app/api
 ```
+
+The Vercel project `mywf-changeover` builds `api/` (root directory `api`) on every push to `main`.
+`web/` has no Vercel project in this repo yet.
 
 ## Backend port status
 
