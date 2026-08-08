@@ -1,0 +1,327 @@
+import { useState, useEffect } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { useRouter } from "next/router";
+import FormHelperText from "@mui/material/FormHelperText";
+import { useUserContext } from "../lib/useUserContext";
+import authApi from "@api/auth";
+import { clearLoggedInState } from "@lib/handleLogout";
+import RedirectUser from "@lib/redirectUser";
+import usePerson from "@hooks/usePerson";
+
+import { getScreenSize } from "../hooks/react-responsive";
+import {
+  Button,
+  Grid,
+  Stack,
+  Typography,
+  Card,
+  TextField,
+  PageContainer,
+  Icon,
+  Spinner,
+} from "@ui";
+
+const Login = ({}) => {
+  const { screenSize } = getScreenSize();
+  const [sentEmailLoginRequest, setSentEmailLoginRequest] = useState(false);
+  const { setCurrentUser, isLoggedIn, currentUser } = useUserContext();
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const hasSSJ = currentUser?.attributes?.ssj ? true : false;
+  const router = useRouter();
+
+  // Only fetch person data if we have a currentUser
+  const { data: personData } = usePerson(
+    currentUser?.id ? currentUser.id : null
+  );
+
+  useEffect(() => {
+    if (isLoggedIn && currentUser) {
+      setIsLoggingIn(true);
+      const personSchool = currentUser?.attributes?.schools?.length
+        ? currentUser.attributes.schools
+            .filter(
+              (school) =>
+                !school.end_date &&
+                school.role_list?.some(
+                  (role) =>
+                    role === "Teacher Leader" ||
+                    role === "Emerging Teacher Leader"
+                )
+            )
+            .sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
+            ?.id
+        : null;
+
+      RedirectUser({
+        router: router,
+        roleList: currentUser?.personRoleList,
+        isOnboarded: currentUser?.personIsOnboarded,
+        schoolId: personSchool,
+        preferredLanguage: personData?.data?.attributes?.preferredLanguage,
+      });
+    }
+  }, [isLoggedIn, personData]);
+
+  const {
+    control,
+    handleSubmit,
+    trigger,
+    getValues,
+    setError,
+    formState: { errors, isSubmitSuccessful, isSubmitting },
+  } = useForm();
+
+  const onSubmit = async (data) => {
+    try {
+      const downcasedEmail = data.email.toLowerCase();
+      const response = await authApi.login(downcasedEmail, data.password);
+
+      const userAttributes = response.data.data.attributes;
+      const personId = response.data.data.relationships.person.data.id;
+      const personData = response?.data?.included?.find(
+        (a) => a.id === personId
+      )?.attributes;
+      const personRoleList = personData?.roleList;
+      const personIsOnboarded = personData?.isOnboarded;
+      const personPreferredLanguage = personData?.preferredLanguage;
+      const personSchool = response?.data?.data?.attributes?.schools?.length
+        ? response.data.data.attributes.schools
+            .filter(
+              (school) =>
+                !school.end_date &&
+                school.role_list?.some(
+                  (role) =>
+                    role === "Teacher Leader" ||
+                    role === "Emerging Teacher Leader"
+                )
+            )
+            .sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
+            ?.id
+        : null;
+
+      RedirectUser({
+        router: router,
+        roleList: personRoleList,
+        isOnboarded: personIsOnboarded,
+        schoolId: personSchool,
+        preferredLanguage: personPreferredLanguage,
+      });
+    } catch (error) {
+      console.log(error);
+      if (error.response?.status === 401) {
+        clearLoggedInState({});
+        setError("email", {
+          type: "invalid",
+          message: error.response.data,
+        });
+        setError("password", {
+          type: "invalid",
+          message: error.response.data,
+        });
+      } else {
+        // General error handler
+        console.error("An error occurred:", error);
+      }
+    }
+  };
+
+  async function handleRequestPasswordResetEmail() {
+    const emailValid = await trigger("email");
+    if (emailValid) {
+      try {
+        const email = getValues("email");
+        await authApi.resetPasswordEmail(email);
+        setSentEmailLoginRequest(true);
+      } catch (error) {
+        console.error(error);
+        setError("Failed to send login link. Please try again.");
+      }
+    }
+  }
+
+  return (
+    <PageContainer hideNav>
+      <Grid container alignItems="center" justifyContent="center">
+        <Grid item xs={12} sm={6} md={4} lg={3}>
+          <Card>
+            <Stack spacing={6}>
+              <Grid container justifyContent="center">
+                <Grid item>
+                  <Typography variant="h4" bold>
+                    Log in
+                  </Typography>
+                </Grid>
+              </Grid>
+
+              {sentEmailLoginRequest ? (
+                <Stack spacing={3} container>
+                  <Card variant="lightened">
+                    <Grid container justifyContent="center">
+                      <Stack spacing={3} alignItems="center">
+                        <Icon type="checkCircle" variant="primary" />
+                        <Typography variant="h4" center bold>
+                          We emailed you a link
+                        </Typography>
+                        <Typography variant="bodyRegular">
+                          Check your email for a secure link to reset your
+                          password. You should receive it within a few minutes.
+                        </Typography>
+                      </Stack>
+                    </Grid>
+                  </Card>
+                  <Button
+                    onClick={() => setSentEmailLoginRequest(false)}
+                    variant="text"
+                  >
+                    <Typography variant="bodyRegular" center>
+                      Login with my email and password.
+                    </Typography>
+                  </Button>
+                </Stack>
+              ) : (
+                <form onSubmit={handleSubmit(onSubmit)}>
+                  <Stack spacing={6}>
+                    <Stack spacing={3}>
+                      <Controller
+                        name="email"
+                        control={control}
+                        rules={{
+                          required: true,
+                          pattern:
+                            /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
+                        }}
+                        defaultValue=""
+                        render={({ field }) => (
+                          <TextField
+                            disabled={
+                              isSubmitting || isSubmitSuccessful || isLoggingIn
+                            }
+                            autoComplete="username"
+                            label="Email"
+                            placeholder="e.g. jane.smith@gmail.com"
+                            error={errors.email}
+                            helperText={
+                              errors &&
+                              errors.email &&
+                              errors.email.type === "required"
+                                ? "This field is required"
+                                : errors &&
+                                  errors.email &&
+                                  errors.email.type === "pattern" &&
+                                  "Please enter a valid email"
+                            }
+                            data-cy="login-email-input"
+                            {...field}
+                          />
+                        )}
+                      />
+                      <Controller
+                        name="password"
+                        control={control}
+                        rules={{ required: true }}
+                        defaultValue=""
+                        render={({ field }) => (
+                          <TextField
+                            disabled={
+                              isSubmitting || isSubmitSuccessful || isLoggingIn
+                            }
+                            autoComplete="current-password"
+                            type="password"
+                            label="Password"
+                            placeholder="e.g. your password"
+                            error={errors.password}
+                            helperText={
+                              errors &&
+                              errors.password &&
+                              errors.password.type === "required" &&
+                              "This field is required"
+                            }
+                            data-cy="login-password-input"
+                            {...field}
+                          />
+                        )}
+                      />
+                      {(errors?.email?.type === "invalid" ||
+                        errors?.password?.type === "invalid") && (
+                        <FormHelperText error={true}>
+                          Email or password is invalid
+                        </FormHelperText>
+                      )}
+                    </Stack>
+
+                    <Stack alignItems="center" spacing={3}>
+                      <Button
+                        full
+                        disabled={
+                          isSubmitting || isSubmitSuccessful || isLoggingIn
+                        }
+                        type="submit"
+                        data-cy="login-submit-button"
+                      >
+                        <Stack spacing={6} direction="row">
+                          {isSubmitting || isSubmitSuccessful ? (
+                            <Spinner size="20px" />
+                          ) : null}
+                          <Typography variant="bodyRegular" light>
+                            Log in
+                          </Typography>
+                        </Stack>
+                      </Button>
+                    </Stack>
+
+                    <Card variant="lightened" size="small">
+                      <Grid container alignItems="center" spacing={2}>
+                        <Grid item xs={12}>
+                          <Grid container spacing={3}>
+                            <Grid item>
+                              <Icon type="lock" variant="lightened" />
+                            </Grid>
+                            <Grid item flex={1}>
+                              <Stack>
+                                <Typography variant="bodyRegular" bold>
+                                  Forgot your password?
+                                </Typography>
+                                <Typography variant="bodyRegular">
+                                  Reset your password
+                                </Typography>
+                              </Stack>
+                            </Grid>
+                          </Grid>
+                        </Grid>
+                        <Grid item xs={12} ml={6}>
+                          <Button
+                            onClick={handleRequestPasswordResetEmail}
+                            disabled={
+                              isSubmitting || isSubmitSuccessful || isLoggingIn
+                            }
+                            small
+                            variant="lightened"
+                          >
+                            <Stack
+                              direction="row"
+                              spacing={3}
+                              alignItems="center"
+                            >
+                              {!screenSize.isSm && (
+                                <Typography variant="bodyRegular">
+                                  Request link
+                                </Typography>
+                              )}
+                              <Icon type="rightArrow" variant="primary" />
+                            </Stack>
+                          </Button>
+                        </Grid>
+                      </Grid>
+                    </Card>
+                  </Stack>
+                </form>
+              )}
+            </Stack>
+          </Card>
+        </Grid>
+      </Grid>
+    </PageContainer>
+  );
+};
+
+export default Login;

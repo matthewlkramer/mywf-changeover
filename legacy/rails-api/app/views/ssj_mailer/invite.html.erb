@@ -1,0 +1,19 @@
+<p>
+  <%- if @user.first_name %>
+    Dear <%= @user.first_name %>,
+  <% else %>
+    Hello!
+  <% end %> 
+</p>
+<p>
+We are thrilled that you are interested in beginning the School Startup Journey with Wildflower!
+</p>
+<p>
+As a next step, we invite you to join <b><%= ENV['APP_NAME'] %></b>, a platform that provides shared access to Wildflower’s School Startup Journey guide and resources. Please <%= link_to "click here", @invite_url %> to activate your account and begin your journey!
+</p>
+<p>
+<br/>
+Warmly,
+<br/>
+Wildflower Support
+</p>

@@ -1,0 +1,14 @@
+class V1::Workflow::Definition::StepSerializer < ApplicationSerializer
+  set_id :id
+
+  attributes :title, :title_es, :description, :description_es, :kind, :position, :completion_type, :decision_question,
+             :decision_question_es, :min_worktime, :max_worktime
+
+  has_many :decision_options, serializer: V1::Workflow::AdminDecisionOptionSerializer do |step|
+    step.decision_options
+  end
+
+  has_many :documents, serializer: V1::AdminDocumentSerializer do |step|
+    step.documents
+  end
+end

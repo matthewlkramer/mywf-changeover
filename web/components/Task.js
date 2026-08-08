@@ -1,0 +1,992 @@
+import { useState, useEffect } from "react";
+import { FormControlLabel, RadioGroup } from "@mui/material";
+import { styled, css } from "@mui/material/styles";
+import Router from "next/router";
+import { mutate } from "swr";
+import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
+
+import {
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  ListItemButton,
+} from "@mui/material";
+import {
+  Typography,
+  Grid,
+  Box,
+  Stack,
+  Button,
+  Icon,
+  Chip,
+  Avatar,
+  Snackbar,
+  Card,
+  Radio,
+  Badge,
+  Divider,
+} from "./ui";
+import InfoDrawer from "./InfoDrawer";
+import AssigneeRoster from "./AssigneeRoster";
+import stepsApi from "@api/workflow/steps";
+import usePerson from "@hooks/usePerson";
+import useSchool from "@hooks/useSchool";
+import { useUserContext } from "@lib/useUserContext";
+import { clearLoggedInState } from "@lib/handleLogout";
+import { handleFindMatchingItems } from "@lib/utils/usefulHandlers";
+import { getTranslatedAttr } from "@lib/utils/getTranslatedAttr";
+import { getScreenSize } from "@hooks/react-responsive";
+
+const StyledTask = styled(Box)`
+  width: 100%;
+  border-bottom: 1px solid ${({ theme }) => theme.color.neutral.main};
+  padding: ${({ theme }) => theme.util.buffer * 6}px 0;
+  transition: all 0.15s ease;
+  &:hover {
+    background: ${({ theme }) => theme.color.neutral.lightened};
+    transition: all 0.15s ease;
+  }
+
+  /* Small */
+  ${(props) =>
+    props.variant === "small" &&
+    css`
+      padding: ${props.theme.util.buffer * 2.5}px;
+    `}
+
+  &:last-child {
+    border-bottom: none;
+  }
+  &:hover {
+    cursor: pointer;
+  }
+`;
+
+const Task = ({
+  task,
+  isLast,
+  handleCompleteMilestone,
+  categories,
+  variant,
+  removeStep,
+  processName,
+  workflowId,
+}) => {
+  const { screenSize } = getScreenSize();
+  const { t } = useTranslation("common");
+  const { currentUser } = useUserContext();
+  const router = useRouter();
+  const { workflow, milestone, schoolId } = router.query;
+  const effectiveWorkflowId = workflowId || workflow;
+
+  // Get the current school data
+  const { data: school, isLoading: schoolIsLoading } = useSchool(schoolId);
+
+  let assignableUsers;
+
+  // Only set assignable users once school data is loaded
+  if (!schoolIsLoading && school?.included) {
+    // First get all active school relationships
+    const schoolRelationships = school.included.filter(
+      (item) => item.type === "schoolRelationship" && !item.attributes.endDate
+    );
+
+    // Get the person IDs from the active relationships and map their roles
+    const activePersonRoles = schoolRelationships.reduce(
+      (acc, relationship) => {
+        const personId = relationship.relationships.person.data.id;
+        acc[personId] = relationship.attributes.roleList;
+        return acc;
+      },
+      {}
+    );
+
+    // Filter included array for persons who are onboarded and have an active school relationship
+    // with Teacher Leader or Emerging Teacher Leader role
+    assignableUsers = school.included
+      .filter(
+        (item) =>
+          item.type === "person" &&
+          item.attributes.isOnboarded === true &&
+          activePersonRoles[item.id]?.some((role) =>
+            ["Teacher Leader", "Emerging Teacher Leader"].includes(role)
+          )
+      )
+      .map((person) => ({
+        ...person,
+        attributes: {
+          ...person.attributes,
+          schoolRoleList: activePersonRoles[person.id],
+        },
+      }));
+  }
+
+  // Common interface that all invocations of Task should use.
+  // Always call out the constants here and never directly pull from task.attributes in the UI; except unless you are setting default state in a useState hook.
+  // If you have props that depend on where they are being called from, put them as inputs for Task
+
+  // console.log({ school });
+  // console.log({ task });
+  // console.log({ assignableUsers });
+
+  const taskId = task.id;
+  const title =
+    task?.attributes[getTranslatedAttr(Router.locale, "title")] ||
+    task?.attributes.title;
+  const description =
+    task?.attributes[getTranslatedAttr(Router.locale, "description")] ||
+    task?.attributes.description;
+  const worktime = task.attributes.maxWorktime;
+
+  const resources = task.relationships.documents.data;
+
+  const [taskIsAssigned, setTaskIsAssigned] = useState(
+    task?.relationships?.assignees?.data
+      ? task?.relationships?.assignees?.data
+      : null
+  );
+
+  const [taskIsAssignedToMe, setTaskIsAssignedToMe] = useState(
+    task.attributes.isAssignedToMe
+  );
+  const [canAssignTask, setCanAssignTask] = useState(task.attributes.canAssign);
+  const [canUnassignTask, setCanUnassignTask] = useState(
+    task.attributes.canUnassign
+  );
+  const [taskAssignees, setTaskAssignees] = useState(
+    task.relationships.assignees.data || []
+  );
+
+  const [taskIsComplete, setTaskIsComplete] = useState(
+    task.attributes.isComplete
+  );
+  const [canCompleteTask, setCanCompleteTask] = useState(
+    task.attributes.canComplete
+  );
+  const [canUncompleteTask, setCanUncompleteTask] = useState(
+    task.attributes.canUncomplete
+  );
+  const [taskCompleters, setTaskCompleters] = useState(
+    task.relationships.completers.data || []
+  );
+  const [completionType, setCompletionType] = useState(
+    task.attributes.completionType
+  );
+
+  // default to a selected option if selected in assignments.
+  const isDecision = task.attributes.isDecision;
+  const decisionQuestion =
+    task.attributes[getTranslatedAttr(Router.locale, "decisionQuestion")] ||
+    task.attributes.decisionQuestion;
+  const decisionOptions = task.relationships.decisionOptions?.data || [];
+  const [isDecided, setIsDecided] = useState(task.attributes.isComplete);
+  const [selectedDecisionOption, setDecisionOption] = useState(
+    task.attributes.selectedOption
+  ); // your selection
+
+  const [infoDrawerOpen, setInfoDrawerOpen] = useState(false);
+  const [assignToastOpen, setAssignToastOpen] = useState(false);
+  const [unassignToastOpen, setUnassignToastOpen] = useState(false);
+
+  // when the task is mutated, reset interface state
+  useEffect(() => {
+    setTaskIsAssigned(task?.relationships?.assignees?.data || null);
+    setTaskIsAssignedToMe(task.attributes.isAssignedToMe);
+    setCanAssignTask(task.attributes.canAssign);
+    setCanUnassignTask(task.attributes.canUnassign);
+    setTaskAssignees(task.relationships.assignees.data || []);
+    setTaskIsComplete(task.attributes.isComplete);
+    setCanCompleteTask(task.attributes.canComplete);
+    setCanUncompleteTask(task.attributes.canUncomplete);
+    setTaskCompleters(task.relationships.completers.data || []);
+    setCompletionType(task.attributes.completionType);
+    setIsDecided(task.attributes.isComplete);
+  }, [task]);
+
+  async function handleCompleteTask() {
+    // api call, backend determiens state. needs spinner and error management.
+    try {
+      // if checking, complete, if unchecking, uncomplete.
+      const response = await stepsApi.complete(taskId);
+      const task = response.data.data;
+
+      setInfoDrawerOpen(false);
+      mutate(`/processes/${milestone}`);
+      mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+      if (removeStep) {
+        removeStep(taskId);
+        mutate(`/processes/${milestone}`);
+        mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+      }
+    } catch (error) {
+      if (error?.response?.status === 401) {
+        clearLoggedInState({});
+        Router.push("/login");
+      } else {
+        console.error(error);
+      }
+    }
+
+    if (isLast) {
+      handleCompleteMilestone();
+      setInfoDrawerOpen(false);
+    }
+  }
+  async function handleUncompleteTask() {
+    // api call, backend determiens state. needs spinner and error management.
+    try {
+      // if checking, complete, if unchecking, uncomplete.
+      const response = await stepsApi.uncomplete(taskId);
+      const task = response.data.data;
+
+      mutate(`/processes/${milestone}`);
+      mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        clearLoggedInState({});
+        Router.push("/login");
+      } else {
+        console.error(err);
+      }
+    }
+  }
+  async function handleAssignUser(assigneeId) {
+    try {
+      const response = await stepsApi.assign(taskId, assigneeId);
+      const task = response.data.data;
+      mutate(`/processes/${milestone}`);
+      mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        clearLoggedInState({});
+        Router.push("/login");
+      } else {
+        console.error(err);
+      }
+    }
+    setAssignToastOpen(true);
+  }
+  async function handleUnassignUser(assigneeId) {
+    try {
+      const response = await stepsApi.unassign(taskId, assigneeId);
+      const task = response.data.data;
+      mutate(`/processes/${milestone}`);
+      mutate(`/workflows/${workflow}/assigned_steps`);
+      if (removeStep) {
+        removeStep(taskId);
+        mutate(`/processes/${milestone}`);
+        mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+      }
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        clearLoggedInState({});
+        Router.push("/login");
+      } else {
+        console.error(err);
+      }
+    }
+    setUnassignToastOpen(true);
+  }
+  async function handleMakeDecision() {
+    try {
+      const response = await stepsApi.selectOption(
+        taskId,
+        selectedDecisionOption
+      );
+      const task = response.data.data;
+
+      mutate(`/processes/${milestone}`);
+      mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+      setInfoDrawerOpen(false);
+
+      if (removeStep) {
+        removeStep(taskId);
+        mutate(`/processes/${milestone}`);
+        mutate(`/workflows/${effectiveWorkflowId}/assigned_steps`);
+      }
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        clearLoggedInState({});
+        Router.push("/login");
+      } else {
+        console.error(err);
+      }
+    }
+  }
+
+  return (
+    <>
+      <ListItem
+        disablePadding
+        secondaryAction={
+          <Stack direction="row" spacing={3} alignItems="center">
+            {processName && !screenSize.isSm && (
+              <Chip label={processName} size="small" />
+            )}
+            {assignableUsers ? (
+              <AssigneeRoster
+                handleAssignUser={handleAssignUser}
+                handleUnassignUser={handleUnassignUser}
+                assignableUsers={assignableUsers}
+                assignees={taskAssignees}
+                completers={taskCompleters}
+                completionType={completionType}
+                dataCy={`assign-user-button-inline-${title}`}
+              />
+            ) : null}
+          </Stack>
+        }
+      >
+        <ListItemButton onClick={() => setInfoDrawerOpen(true)}>
+          <ListItemIcon
+            sx={{ minWidth: "48px", paddingLeft: "1px" }}
+            children={
+              // eslint-disable-line react/no-children-prop
+              isDecision ? (
+                <Icon
+                  type="zap"
+                  variant={isDecided ? "primary" : "lightened"}
+                />
+              ) : (
+                <Icon
+                  type={taskIsComplete ? "checkCircle" : "circleSolid"}
+                  variant={taskIsComplete ? "primary" : "lightest"}
+                  className={
+                    taskIsComplete ? "completedTask" : "uncompletedTask"
+                  }
+                />
+              )
+            }
+          />
+          <ListItemText>
+            <Stack direction="row" spacing={3} alignItems="center">
+              <Typography
+                variant={variant === "small" ? "bodySmall" : "bodyRegular"}
+                struck={isDecided || taskIsComplete}
+                noWrap
+              >
+                {title}
+              </Typography>
+              {isDecision ? (
+                <Chip
+                  label={
+                    isDecided
+                      ? t("ssj_ui_content.decided")
+                      : t("ssj_ui_content.decision")
+                  }
+                  size="small"
+                  variant={isDecided && "primary"}
+                />
+              ) : null}
+            </Stack>
+          </ListItemText>
+        </ListItemButton>
+      </ListItem>
+
+      <InfoDrawer
+        open={infoDrawerOpen}
+        toggle={() => setInfoDrawerOpen(!infoDrawerOpen)}
+        assignees={taskAssignees}
+        about={description}
+        taskId={taskId}
+        title={title}
+        resources={resources}
+        categories={categories}
+        worktime={worktime}
+        isDecision={isDecision}
+        taskIsComplete={taskIsComplete}
+        completers={taskCompleters}
+        handleAssignUser={handleAssignUser}
+        handleUnassignUser={handleUnassignUser}
+        assignableUsers={Array.isArray(assignableUsers) ? assignableUsers : []}
+        completionType={completionType}
+        processName={processName}
+        actions={
+          isDecision ? (
+            <DecisionDrawerActions
+              completionType={completionType}
+              assignableUsers={assignableUsers}
+              taskIsAssigned={taskIsAssigned}
+              taskIsAssignedToMe={taskIsAssignedToMe}
+              isDecided={isDecided}
+              decisionQuestion={decisionQuestion}
+              decisionOptions={decisionOptions}
+              selectedDecisionOption={selectedDecisionOption}
+              setDecisionOption={setDecisionOption}
+              canAssignTask={canAssignTask}
+              canUnassignTask={canUnassignTask}
+              handleAssignUser={handleAssignUser}
+              handleUnassignUser={handleUnassignUser}
+              handleMakeDecision={handleMakeDecision}
+              taskCompleters={taskCompleters}
+            />
+          ) : (
+            <TaskDrawerActions
+              completionType={completionType}
+              assignableUsers={assignableUsers}
+              taskIsAssigned={taskIsAssigned}
+              taskIsAssignedToMe={taskIsAssignedToMe}
+              taskIsComplete={taskIsComplete}
+              canAssignTask={canAssignTask}
+              canUnassignTask={canUnassignTask}
+              canCompleteTask={canCompleteTask}
+              canUncompleteTask={canUncompleteTask}
+              taskCompleters={taskCompleters}
+              handleAssignUser={handleAssignUser}
+              handleUnassignUser={handleUnassignUser}
+              handleCompleteTask={handleCompleteTask}
+              handleUncompleteTask={handleUncompleteTask}
+            />
+          )
+        }
+      />
+      <TaskToast
+        open={assignToastOpen}
+        onClose={() => setAssignToastOpen(false)}
+        isAssignToast={true}
+        title={title}
+        imageUrl={currentUser?.attributes?.imageUrl}
+      />
+      <TaskToast
+        open={unassignToastOpen}
+        onClose={() => setUnassignToastOpen(false)}
+        isAssignToast={false}
+        title={title}
+        imageUrl={currentUser?.attributes?.imageUrl}
+      />
+    </>
+  );
+};
+
+export default Task;
+
+const DecisionDrawerActions = ({
+  taskIsAssignedToMe,
+  isDecided,
+  decisionQuestion,
+  decisionOptions,
+  selectedDecisionOption,
+  setDecisionOption,
+  canAssignTask,
+  canUnassignTask,
+  handleAssignUser,
+  handleUnassignUser,
+  handleMakeDecision,
+  taskCompleters,
+  completionType,
+}) => {
+  const handleDecisionOptionChange = (e) => {
+    setDecisionOption(e.target.value);
+  };
+  const { currentUser } = useUserContext();
+  const { t } = useTranslation("common");
+
+  // what are the options for the step.  show that.
+  // show hte currently selected decision?
+  const showDecisionForm = taskIsAssignedToMe;
+  // TODO: get task completers
+  const completedBy = taskCompleters[0]; // just take the first since only used when its not me
+
+  const StyledDecisionCard = styled(Card)`
+    width: 100%;
+    /* Disabled */
+    ${(props) =>
+      props.disabled &&
+      css`
+        opacity: 0.7;
+        pointer-events: none;
+      `};
+  `;
+  return (
+    <Stack spacing={4}>
+      {showDecisionForm ? (
+        <Grid container>
+          <StyledDecisionCard
+            variant={isDecided ? "outlined" : "primaryOutlined"}
+            disabled={isDecided}
+          >
+            <Stack spacing={6}>
+              <Typography variant="bodyRegular" bold>
+                {decisionQuestion}
+              </Typography>
+              <RadioGroup value={selectedDecisionOption}>
+                {decisionOptions.map((o, i) => (
+                  <FormControlLabel
+                    key={o.id}
+                    value={o.id}
+                    control={<Radio disabled={isDecided} />}
+                    label={
+                      o.attributes[
+                        getTranslatedAttr(Router.locale, "description")
+                      ] || o.attributes.description
+                    }
+                    onChange={handleDecisionOptionChange}
+                  />
+                ))}
+              </RadioGroup>
+            </Stack>
+          </StyledDecisionCard>
+        </Grid>
+      ) : null}
+
+      <Grid container spacing={6}>
+        {taskIsAssignedToMe ? (
+          isDecided ? (
+            <Grid item xs={12}>
+              <Card variant="lightened">
+                <Stack spacing={3}>
+                  <Stack direction="row" spacing={3} alignItems="center">
+                    <Icon type="check" variant="primary" />
+                    <Typography variant="bodyLarge" bold highlight>
+                      {t("ssj_ui_content.decision_made")}
+                    </Typography>
+                  </Stack>
+                  <Typography variant="bodyRegular">
+                    {t("ssj_ui_content.you_cant_easily_change_this")}{" "}
+                    support@wildflowerschools.org
+                  </Typography>
+                </Stack>
+              </Card>
+            </Grid>
+          ) : (
+            <>
+              <Grid item xs={12}>
+                <Card size="small" variant="lightened">
+                  <Grid container spacing={3} alignItems="center">
+                    <Grid item>
+                      <Icon type="commentError" variant="primary" />
+                    </Grid>
+                    <Grid item flex={1}>
+                      <Typography variant="bodySmall">
+                        {t("ssj_ui_content.if_youd_like_to_change_this")}{" "}
+                        support@wildflowerschools.org.
+                      </Typography>
+                    </Grid>
+                  </Grid>
+                </Card>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  full
+                  variant="text"
+                  disabled={!canUnassignTask}
+                  onClick={() => handleUnassignUser(currentUser?.id)}
+                >
+                  <Typography bold variant="bodyRegular">
+                    {t("ssj_ui_content.remove_from_to_do_list")}
+                  </Typography>
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  full
+                  disabled={!selectedDecisionOption}
+                  onClick={handleMakeDecision}
+                >
+                  <Typography bold variant="bodyRegular">
+                    {t("ssj_ui_content.make_final_decision")}
+                  </Typography>
+                </Button>
+              </Grid>
+            </>
+          )
+        ) : (
+          <Grid item xs={12}>
+            {isDecided ? (
+              <Button full disabled={true}>
+                <Typography bold>
+                  {t("ssj_ui_content.decided_by")}{" "}
+                  {completedBy?.attributes?.firstName}{" "}
+                  {completedBy?.attributes?.lastName}
+                </Typography>
+              </Button>
+            ) : (
+              <Button
+                full
+                disabled={!canAssignTask}
+                onClick={() => handleAssignUser(currentUser?.id)}
+              >
+                <Typography light bold variant="bodyRegular">
+                  {t("ssj_ui_content.add_to_my_to_do_list")}
+                </Typography>
+              </Button>
+            )}
+          </Grid>
+        )}
+      </Grid>
+    </Stack>
+  );
+};
+
+const TaskDrawerActions = ({
+  taskIsAssigned,
+  taskIsAssignedToMe,
+  taskIsComplete,
+  canAssignTask,
+  canUnassignTask,
+  canCompleteTask,
+  canUncompleteTask,
+  taskCompleters,
+  handleAssignUser,
+  handleUnassignUser,
+  handleCompleteTask,
+  handleUncompleteTask,
+  completionType,
+}) => {
+  const { t } = useTranslation("common");
+  const { currentUser } = useUserContext();
+  // const completedBy = taskCompleters[0]; // just take the first since only used when its not me
+  // NOTE: canUncompleteTask is not the same as "Completed by me" because sometimes we can't uncomplete a step because the process is completed even though we completed the step.
+  // console.log({ taskCompleters });
+
+  return (
+    <Grid container spacing={4}>
+      {taskIsComplete ? (
+        // the task is complete by someone
+        taskIsAssignedToMe ? (
+          canCompleteTask ? (
+            // the task is complete, assigned to me, and I can still complete it
+            <>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  full
+                  variant="danger"
+                  onClick={() => handleUnassignUser(currentUser?.id)}
+                >
+                  <Typography variant="bodyRegular" bold>
+                    {t("ssj_ui_content.remove_from_to_do_list")}
+                  </Typography>
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button full onClick={handleCompleteTask}>
+                  <Typography variant="bodyRegular" light bold>
+                    {t("ssj_ui_content.mark_task_complete")}
+                  </Typography>
+                </Button>
+              </Grid>
+            </>
+          ) : canUncompleteTask ? (
+            // the task is complete, assigned to me, I can't complete it, and I can uncomplete it
+            <Grid item xs={12}>
+              <Button full variant="danger" onClick={handleUncompleteTask}>
+                <Typography bold>
+                  {t("ssj_ui_content.mark_incomplete")}
+                </Typography>
+              </Button>
+            </Grid>
+          ) : (
+            // the task is complete, assigned to me, I can't complete it, and I can't uncomplete it
+            // TODO: in this scenario, the task should be unassigned from the person that can't complete it
+            <Grid item xs={12}>
+              <Button full variant="danger" disabled>
+                <Typography bold>
+                  {`${t("ssj_ui_content.completed_by")} ${taskCompleters.map(
+                    (completer, i) =>
+                      `${completer.attributes.firstName} ${completer.attributes.lastName}`
+                  )}`}
+                </Typography>
+              </Button>
+            </Grid>
+          )
+        ) : // the task is complete, not assigned to me
+        canAssignTask ? (
+          // the task is complete, not assigned to me, and I can assign it
+          canCompleteTask ? (
+            <>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  variant="lightened"
+                  full
+                  disabled={!canAssignTask}
+                  onClick={() => handleAssignUser(currentUser?.id)}
+                >
+                  <Typography bold variant="bodyRegular">
+                    {t("ssj_ui_content.add_to_my_to_do_list")}
+                  </Typography>
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  full
+                  disabled={!canAssignTask}
+                  onClick={handleCompleteTask}
+                >
+                  <Typography light bold variant="bodyRegular">
+                    {t("ssj_ui_content.mark_task_complete")}
+                  </Typography>
+                </Button>
+              </Grid>
+            </>
+          ) : (
+            <div>?</div>
+          )
+        ) : (
+          // the task is complete, not assigned to me, but I can't assign it
+          <Grid item xs={12}>
+            <Button full variant="danger" disabled>
+              <Typography bold>
+                {`${t("ssj_ui_content.completed_by")} ${taskCompleters.map(
+                  (completer, i) =>
+                    `${completer.attributes.firstName} ${completer.attributes.lastName}`
+                )}`}
+              </Typography>
+            </Button>
+          </Grid>
+        )
+      ) : // the task is not complete
+      taskIsAssigned ? (
+        // the task is not complete, and is assigned to someone
+        taskIsAssignedToMe ? (
+          // the task is not complete, and it is assigned to me
+          canUnassignTask ? (
+            // the task is not complete, and it is assigned to me, and I can unassign it
+            <>
+              <Grid item xs={12} sm={6}>
+                <Button
+                  full
+                  variant="danger"
+                  onClick={() => handleUnassignUser(currentUser?.id)}
+                >
+                  <Typography variant="bodyRegular" bold>
+                    {t("ssj_ui_content.remove_from_to_do_list")}
+                  </Typography>
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Button full onClick={handleCompleteTask}>
+                  <Typography variant="bodyRegular" light bold>
+                    {t("ssj_ui_content.mark_task_complete")}
+                  </Typography>
+                </Button>
+              </Grid>
+            </>
+          ) : (
+            // the task is not complete, and it is assigned to me, and I can't unassign it
+            <div>?</div>
+          )
+        ) : (
+          // the task is not complete, and it isn't assigned to me
+          <>
+            <Grid item xs={12} sm={6}>
+              <Button
+                variant="lightened"
+                full
+                disabled={!canAssignTask}
+                onClick={() => handleAssignUser(currentUser?.id)}
+              >
+                <Typography bold variant="bodyRegular">
+                  {t("ssj_ui_content.add_to_my_to_do_list")}
+                </Typography>
+              </Button>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <Button
+                full
+                disabled={!canAssignTask}
+                onClick={handleCompleteTask}
+              >
+                <Typography light bold variant="bodyRegular">
+                  {t("ssj_ui_content.mark_task_complete")}
+                </Typography>
+              </Button>
+            </Grid>
+          </>
+        )
+      ) : // the task is not complete, and isn't assigned to anyone
+      canAssignTask ? (
+        // the task is not complete, and isn't assigned to anyone, and I can assign it
+        <>
+          <Grid item xs={12} sm={6}>
+            <Button
+              variant="lightened"
+              full
+              onClick={() => handleAssignUser(currentUser?.id)}
+            >
+              <Typography bold variant="bodyRegular">
+                {t("ssj_ui_content.add_to_my_to_do_list")}
+              </Typography>
+            </Button>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Button full onClick={handleCompleteTask}>
+              <Typography light bold variant="bodyRegular">
+                {t("ssj_ui_content.mark_task_complete")}
+              </Typography>
+            </Button>
+          </Grid>
+        </>
+      ) : (
+        // the task is not complete, and isn't assigned to anyone, and I can't assign it
+        <>
+          <Grid item xs={12} sm={6}>
+            <Button
+              variant="lightened"
+              full
+              disabled
+              onClick={() => handleAssignUser(currentUser?.id)}
+            >
+              <Typography bold variant="bodyRegular">
+                {t("ssj_ui_content.add_to_my_to_do_list")}
+              </Typography>
+            </Button>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Button full disabled onClick={handleCompleteTask}>
+              <Typography light bold variant="bodyRegular">
+                {t("ssj_ui_content.mark_task_complete")}
+              </Typography>
+            </Button>
+          </Grid>
+        </>
+      )}
+      {/* {taskIsAssignedToMe ? (
+        taskIsComplete ? (
+          canUncompleteTask ? (
+            <Grid item xs={12}>
+              <Button full variant="danger" onClick={handleUncompleteTask}>
+                <Typography bold>Mark incomplete</Typography>
+              </Button>
+            </Grid>
+          ) : (
+            // cannot uncomplete task
+            <Grid item xs={12}>
+              <Button full variant="danger" disabled>
+                <Typography bold>
+                  {`Completed by ${
+                    completedBy && completedBy.attributes.firstName
+                  } ${completedBy && completedBy.attributes.lastName}`}
+                </Typography>
+              </Button>
+            </Grid>
+          )
+        ) : (
+          <>
+            <Grid item xs={6}>
+              <Button
+                full
+                variant="danger"
+                disabled={!canUnassignTask}
+                onClick={() => handleUnassignUser(currentUser?.id)}
+              >
+                <Typography variant="bodyRegular" bold>
+                  Remove from to do list
+                </Typography>
+              </Button>
+            </Grid>
+            <Grid item xs={6}>
+              <Button
+                full
+                disabled={!canCompleteTask}
+                onClick={handleCompleteTask}
+              >
+                <Typography variant="bodyRegular" light bold>
+                  Mark task complete
+                </Typography>
+              </Button>
+            </Grid>
+          </>
+        )
+      ) : (
+        // TODO: don't let someone assign a completed task (collaborative task)
+        <Grid item xs={12}>
+          {taskIsComplete ? (
+            <Button full disabled={true}>
+              <Typography bold>
+                Completed by {completedBy?.attributes?.firstName}{" "}
+                {completedBy?.attributes?.lastName}
+              </Typography>
+            </Button>
+          ) : (
+            <Grid container spacing={3}>
+              <Grid item xs={6}>
+                <Button
+                  variant="lightened"
+                  full
+                  disabled={!canAssignTask}
+                  onClick={() => handleAssignUser(currentUser?.id)}
+                >
+                  <Typography bold variant="bodyRegular">
+                    Add to my to do list
+                  </Typography>
+                </Button>
+              </Grid>
+              <Grid item xs={6}>
+                <Button
+                  full
+                  disabled={!canAssignTask}
+                  onClick={handleCompleteTask}
+                >
+                  <Typography light bold variant="bodyRegular">
+                    Mark task complete
+                  </Typography>
+                </Button>
+              </Grid>
+            </Grid>
+          )}
+        </Grid>
+      )} */}
+    </Grid>
+  );
+};
+
+const TaskToast = ({ isAssignToast, open, onClose, title, imageUrl }) => {
+  const { t } = useTranslation("common");
+  return (
+    <Snackbar
+      open={open}
+      onClose={onClose}
+      autoHideDuration={4000}
+      anchorOrigin={{ vertical: "top", horizontal: "right" }}
+    >
+      <div>
+        <Card size="small" variant="primaryOutlined" sx={{ width: "320px" }}>
+          <Stack spacing={1}>
+            <Grid container alignItems="center" justifyContent="space-between">
+              <Grid item>
+                <Typography
+                  variant="bodySmall"
+                  lightened
+                  capitalize
+                  data-cy={
+                    isAssignToast ? "task-added-toast" : "task-removed-toast"
+                  }
+                >
+                  {t("ssj_ui_content.task")}{" "}
+                  {isAssignToast
+                    ? t("ssj_ui_content.added")
+                    : t("ssj_ui_content.removed")}
+                </Typography>
+              </Grid>
+              <Grid item>
+                <Icon type="close" hoverable onClick={onClose} />
+              </Grid>
+            </Grid>
+            <Typography variant="bodyRegular" bold>
+              {title}
+            </Typography>
+            <Stack direction="row" spacing={3} alignItems="center">
+              {/* // TODO: becomes current user */}
+              <Avatar size="mini" src={imageUrl} />
+              <Stack direction="row" spacing={1}>
+                <Typography variant="bodySmall" capitalize>
+                  {t("ssj_ui_content.you")}
+                </Typography>
+                <Typography variant="bodySmall" lightened>
+                  {isAssignToast
+                    ? t("ssj_ui_content.added")
+                    : t("ssj_ui_content.removed")}
+                </Typography>
+                <Typography variant="bodySmall">
+                  {t("ssj_ui_content.this_task")}
+                </Typography>
+              </Stack>
+            </Stack>
+          </Stack>
+        </Card>
+      </div>
+    </Snackbar>
+  );
+};

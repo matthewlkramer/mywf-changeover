@@ -1,0 +1,1992 @@
+import { useState, useEffect } from "react";
+import { useRouter } from "next/router";
+import { mutate } from "swr";
+import { useSortable } from "@dnd-kit/sortable";
+import { Controller, useForm } from "react-hook-form";
+
+import { snakeCase } from "@lib/utils/snakeCase";
+import { periods } from "@lib/utils/open-school-checklist-periods";
+import {
+  List,
+  Card,
+  ListItem,
+  ListItemText,
+  ListItemButton,
+  ListSubheader,
+  Chip,
+  Stack,
+  Button,
+  Box,
+  Select,
+  OutlinedInput,
+  FormControl,
+  InputLabel,
+  Checkbox,
+  TextField,
+  MenuItem,
+  Skeleton,
+  Breadcrumbs,
+  Link,
+  Snackbar,
+  Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Radio,
+  RadioGroup,
+  FormControlLabel,
+  FormHelperText,
+  Switch,
+  Drawer,
+  Divider,
+  InputAdornment,
+  CircularProgress,
+} from "@mui/material";
+import ssj_categories from "@lib/ssj/categories";
+import CategoryChip from "@components/CategoryChip";
+import { DragHandle, Edit, Warning, Check } from "@mui/icons-material";
+import { PageContainer, Grid, Typography } from "@ui";
+import InlineActionTile from "@components/admin/InlineActionTile";
+import DraggableList from "@components/admin/DraggableList";
+
+import processes from "@api/workflow/definition/processes";
+import stepsApi from "@api/workflow/definition/steps";
+import processApi from "@api/workflow/definition/processes";
+import workflowApi from "@api/workflow/definition/workflows";
+import useProcessInWorkflow from "@hooks/workflow/definition/useProcessInWorkflow";
+import useStep from "@hooks/workflow/definition/useStep";
+import useWorkflow from "@hooks/workflow/definition/useWorkflow";
+import { Education } from "styled-icons/zondicons";
+import { set } from "lodash";
+
+const ProcessId = ({}) => {
+  const router = useRouter();
+  const processId = router.query.processId;
+  const [workflowId, setWorkflowId] = useState(null);
+  const [isEditingProcess, setIsEditingProcess] = useState(false);
+  const [isDraftingNewVersion, setIsDraftingNewVersion] = useState(null);
+  const [processHasChanges, setProcessHasChanges] = useState(false);
+  const [originalData, setOriginalData] = useState(false);
+  const [repositionedSnackbarOpen, setRepositionedSnackbarOpen] =
+    useState(false);
+  const [updatedProcessSnackbarOpen, setUpdatedProcessSnackbarOpen] =
+    useState(false);
+  const [addStepModalOpen, setAddStepModalOpen] = useState(false);
+  const [addStepPosition, setAddStepPosition] = useState(null);
+  const [showAddPrerequisiteModal, setShowAddPrerequisiteModal] =
+    useState(false);
+  const [showChoosePositionModal, setShowChoosePositionModal] = useState({
+    state: false,
+    intent: false,
+  });
+  const [updateProcessPositionData, setUpdateProcessPositionData] =
+    useState(null);
+
+  const [showEditLanguageModal, setShowEditLanguageModal] = useState(false);
+
+  // console.log({ isDraftingNewVersion });
+  // console.log({ isEditingProcess });
+
+  const { workflow, isLoading: workflowIsLoading } = useWorkflow(workflowId);
+  // console.log({ workflow });
+
+  const { processInWorkflow: milestone, isLoading } = useProcessInWorkflow(
+    workflowId,
+    processId
+  );
+  // console.log({ milestone });
+
+  const isRecurring = milestone?.attributes.recurring;
+
+  // console.log({ processId });
+
+  // const { milestone, isLoading, isError } = useMilestone(processId);
+  // console.log(milestone);
+
+  useEffect(() => {
+    const id = localStorage.getItem("workflowId");
+    setWorkflowId(id);
+  }, []);
+  useEffect(() => {
+    setIsDraftingNewVersion(workflow?.attributes.published === false);
+    setIsEditingProcess(
+      milestone?.relationships.selectedProcesses.data[0].attributes.state ===
+        "upgraded" ||
+        milestone?.relationships.selectedProcesses.data[0].attributes.state ===
+          "added" ||
+        milestone?.relationships.selectedProcesses.data[0].attributes.state ===
+          "initialized"
+    );
+  }, [workflow, milestone]);
+
+  const {
+    control,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { errors, isDirty },
+  } = useForm();
+
+  // console.log({ errors });
+
+  useEffect(() => {
+    setProcessHasChanges(isDirty);
+  }, [isDirty]);
+
+  const processPeriod = isRecurring
+    ? periods.find(
+        (period) =>
+          period.value.due_months.every((month) =>
+            milestone?.attributes.dueMonths.includes(month)
+          ) &&
+          milestone?.attributes.dueMonths.every((month) =>
+            period.value.due_months.includes(month)
+          ) &&
+          period.value.duration === milestone?.attributes.duration
+      )
+    : null;
+
+  useEffect(() => {
+    if (!isLoading && milestone) {
+      const defaultValues = {
+        title: milestone?.attributes?.title,
+        description: milestone?.attributes?.description,
+        prerequisite: milestone?.attributes?.prerequisite,
+        category_list: milestone?.attributes?.categories,
+        phase_list: milestone?.attributes?.phase,
+        period: isRecurring ? processPeriod.value.id : null,
+      };
+      setOriginalData(defaultValues);
+      reset(defaultValues);
+    }
+  }, [isLoading, milestone, reset]);
+
+  const handleUpdateProcess = async (data) => {
+    // Remove unchanged data
+    const updatedData = Object.keys(data).reduce((acc, key) => {
+      if (data[key] !== originalData[key]) {
+        if (key === "category_list" && !Array.isArray(data[key])) {
+          acc[key] = [data[key]];
+        } else {
+          acc[key] = data[key];
+        }
+      }
+      // console.log({ acc });
+      return acc;
+    }, {});
+
+    // if updatedData includes period, reshape it to no longer include period, and instead include due_months and duration
+    if (updatedData.period) {
+      const selectedPeriod = periods.find(
+        (period) => period.value.id === updatedData.period
+      );
+      updatedData.duration = selectedPeriod?.value.duration;
+      updatedData.due_months = selectedPeriod?.value.due_months;
+      delete updatedData.period;
+    }
+
+    // console.log({ updatedData });
+    // console.log({ updateProcessPositionData });
+
+    if (updateProcessPositionData) {
+      updatedData.selected_processes_attributes =
+        updateProcessPositionData.process.selected_processes_attributes;
+    }
+
+    // Update the process
+    try {
+      const response = await processes.editMilestone(milestone.id, updatedData);
+      setProcessHasChanges(false);
+      setUpdatedProcessSnackbarOpen(true);
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+      // console.log(response);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+  const handleCancelUpdateProcess = () => {
+    // console.log("Cancel update process");
+    // Reset form to original data
+    reset(originalData);
+  };
+
+  const handleRepositionStep = async (
+    stepId,
+    priorItemPosition,
+    subsequentItemPosition
+  ) => {
+    let newPosition;
+    if (priorItemPosition === null) {
+      newPosition = Math.floor(subsequentItemPosition / 2);
+    } else if (subsequentItemPosition === null) {
+      newPosition = Math.floor(priorItemPosition * 1.5);
+    } else {
+      newPosition = Math.floor(
+        (priorItemPosition + subsequentItemPosition) / 2
+      );
+    }
+    const data = { step: { position: Number(newPosition) } };
+
+    try {
+      const response = await stepsApi.editStep(processId, stepId, data);
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+      setRepositionedSnackbarOpen(true);
+    } catch (error) {
+      console.error("There was an error!", error);
+    }
+  };
+
+  const handleStageAddStep = (position) => {
+    setAddStepPosition(position);
+    setAddStepModalOpen(true);
+  };
+  const handleCreateStep = async (data) => {
+    // console.log("Add step", data);
+    const structuredData = {
+      step: {
+        ...data,
+      },
+    };
+
+    try {
+      const response = await stepsApi.createStep(processId, structuredData);
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const onSubmit = handleSubmit(handleUpdateProcess);
+
+  const handleEditProcessInRollout = async () => {
+    try {
+      const response = await workflowApi.createNewProcessVersion(
+        workflowId,
+        processId
+      );
+      // console.log({ response });
+      router.push(`/admin/workflows/processes/${response.data.data.id}`);
+      setIsEditingProcess(true);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const handleRevertAllEdits = async (selectedProcessId) => {
+    try {
+      const response = await workflowApi.reinstateProcessInWorkflow(
+        selectedProcessId
+      );
+      // console.log({ response });
+      router.push(
+        `/admin/workflows/processes/${response.data.data.attributes.processId}`
+      );
+    } catch (error) {
+      console.log(error);
+    }
+    setIsEditingProcess(false);
+  };
+
+  const handleAddPrerequisite = async (id) => {
+    const structuredData = {
+      process: {
+        workable_dependencies_attributes: [
+          {
+            workflow_id: workflowId,
+            prerequisite_workable_type: "Workflow::Definition::Process",
+            prerequisite_workable_id: id,
+          },
+        ],
+      },
+    };
+    try {
+      const response = await processApi.editMilestone(
+        processId,
+        structuredData
+      );
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+      setShowAddPrerequisiteModal(false);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const handleDeleteDependency = async (dependencyId) => {
+    // console.log("Delete dependency", dependencyId);
+    try {
+      const response = await workflowApi.deleteDependency(dependencyId);
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+  const phaseListField = watch("phase_list");
+
+  useEffect(() => {
+    if (
+      showChoosePositionModal.intent === true &&
+      phaseListField &&
+      originalData?.phase_list !== phaseListField
+    ) {
+      setShowChoosePositionModal((prevState) => ({
+        ...prevState,
+        state: true,
+      }));
+    }
+  }, [
+    phaseListField,
+    showChoosePositionModal.intent,
+    originalData?.phase_list,
+  ]);
+
+  const handleChoosePosition = async (position, phase, selectedProcessId) => {
+    // console.log(position);
+    const structuredData = {
+      process: {
+        phase_list: phase,
+        selected_processes_attributes: [
+          {
+            workflow_id: workflow.id,
+            position: position,
+            id: selectedProcessId,
+          },
+        ],
+      },
+    };
+    // console.log({ structuredData });
+    setUpdateProcessPositionData(structuredData);
+  };
+
+  // console.log({ originalData });
+  // console.log({ phaseListField });
+
+  const phaseChanged = originalData.phase_list !== phaseListField;
+
+  return (
+    <PageContainer isAdmin>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <Stack spacing={6}>
+          {isDraftingNewVersion ? (
+            <Alert severity="warning" icon={<Edit fontSize="inherit" />}>
+              <Typography variant="bodyRegular">
+                Drafting new rollout
+              </Typography>
+            </Alert>
+          ) : null}
+          <Breadcrumbs aria-label="breadcrumb">
+            {workflowId ? (
+              <Link
+                underline="hover"
+                color="inherit"
+                href={`/admin/workflows/${workflowId}`}
+              >
+                <Typography variant="bodyRegular" lightened>
+                  Workflow
+                </Typography>
+              </Link>
+            ) : (
+              <Link
+                underline="hover"
+                color="inherit"
+                href={`/admin/workflows/processes`}
+              >
+                <Typography variant="bodyRegular" lightened>
+                  Processes
+                </Typography>
+              </Link>
+            )}
+
+            <Typography variant="bodyRegular">
+              {isLoading ? <Skeleton width={64} /> : milestone.attributes.title}
+            </Typography>
+          </Breadcrumbs>
+
+          <Grid container justifyContent="space-between" alignItems="center">
+            <Grid item>
+              <Stack direction="row" spacing={3} alignItems="center">
+                <Typography variant="h4" bold>
+                  {isLoading ? (
+                    <Skeleton width={240} />
+                  ) : (
+                    milestone.attributes.title
+                  )}
+                </Typography>
+                {/* <Chip label="Live" color="primary" size="small" /> */}
+                {/* <Typography variant="bodyRegular" lightened>
+                    Updated 4 weeks ago
+                  </Typography> */}
+              </Stack>
+            </Grid>
+
+            <Grid item>
+              {processHasChanges ? (
+                <Stack direction="row" spacing={3}>
+                  <Button
+                    variant="secondary"
+                    onClick={handleCancelUpdateProcess}
+                  >
+                    Cancel
+                  </Button>
+                  <Button variant="contained" onClick={onSubmit}>
+                    Update
+                  </Button>
+                </Stack>
+              ) : isDraftingNewVersion ? (
+                !isEditingProcess ? (
+                  <Button
+                    variant="contained"
+                    onClick={handleEditProcessInRollout}
+                  >
+                    Edit This Process
+                  </Button>
+                ) : (
+                  <Stack direction="row" spacing={3}>
+                    {milestone?.relationships.selectedProcesses.data[0]
+                      .attributes.state === "initialized" ||
+                    milestone?.relationships.selectedProcesses.data[0]
+                      .attributes.state === "added" ? null : (
+                      <Button
+                        variant="contained"
+                        onClick={() =>
+                          handleRevertAllEdits(
+                            milestone.relationships.selectedProcesses.data[0].id
+                          )
+                        }
+                      >
+                        Revert All Edits
+                      </Button>
+                    )}
+                    <Button variant="contained" disabled>
+                      Update
+                    </Button>
+                  </Stack>
+                )
+              ) : (
+                <Stack direction="row" spacing={3}>
+                  <Button variant="contained" disabled>
+                    Update
+                  </Button>
+                </Stack>
+              )}
+            </Grid>
+          </Grid>
+
+          <Grid container>
+            <Grid item>
+              <Stack spacing={2}>
+                <Typography variant="bodyMini" bold lightened>
+                  LANGUAGE SUPPORT
+                </Typography>
+                <Stack direction="row" spacing={2} alignItems="center">
+                  {isLoading ? (
+                    <Skeleton width={64} height={28} variant="rounded" />
+                  ) : (
+                    <Chip label={"English"} size="small" />
+                  )}
+                  {isLoading ? (
+                    <Skeleton width={64} height={28} variant="rounded" />
+                  ) : (
+                    <Chip label={"Spanish"} size="small" />
+                  )}
+                  {isLoading ? (
+                    <Skeleton width={64} height={28} variant="rounded" />
+                  ) : (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      endIcon={<Edit fontSize="inherit" />}
+                      onClick={() => setShowEditLanguageModal(true)}
+                      data-cy="edit-language-button"
+                    >
+                      Edit
+                    </Button>
+                  )}
+                </Stack>
+              </Stack>
+            </Grid>
+          </Grid>
+
+          {/* FORM */}
+          <Stack spacing={3}>
+            <Controller
+              name="title"
+              control={control}
+              defaultValue=""
+              rules={{
+                required: {
+                  value: true,
+                  message: "This field is required",
+                },
+              }}
+              render={({ field }) => (
+                <>
+                  <TextField
+                    disabled={isDraftingNewVersion && !isEditingProcess}
+                    label="Title"
+                    placeholder="e.g. Complete The Visioning Advice Process"
+                    error={errors.title}
+                    {...field}
+                  />
+                  <FormHelperText error={errors.title}>
+                    {errors && errors.title && errors.title.message}
+                  </FormHelperText>
+                </>
+              )}
+            />
+            <Controller
+              name="description"
+              control={control}
+              defaultValue=""
+              render={({ field }) => (
+                <TextField
+                  disabled={isDraftingNewVersion && !isEditingProcess}
+                  multiline
+                  label="Description"
+                  placeholder="The description of this process"
+                  {...field}
+                />
+              )}
+            />
+
+            <FormControl fullWidth>
+              <InputLabel id="categories-label">Categories</InputLabel>
+              <Controller
+                name="category_list"
+                control={control}
+                defaultValue={[]}
+                rules={{
+                  required: {
+                    value: true,
+                    message: "This field is required",
+                  },
+                }}
+                render={({ field }) => (
+                  <>
+                    <Select
+                      disabled={isDraftingNewVersion && !isEditingProcess}
+                      {...field}
+                      labelId="categories-label"
+                      id="categories"
+                      input={<OutlinedInput label="Categories" />}
+                    >
+                      {categories.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>
+                          <ListItemText primary={option.label} />
+                        </MenuItem>
+                      ))}
+                    </Select>
+                    <FormHelperText error={errors.category_list}>
+                      {errors &&
+                        errors.category_list &&
+                        errors.category_list.type === "required" &&
+                        "This field is required"}
+                    </FormHelperText>
+                  </>
+                )}
+              />
+            </FormControl>
+
+            {isRecurring ? (
+              <FormControl fullWidth>
+                <InputLabel id="period-label">Period</InputLabel>
+                <Controller
+                  name="period"
+                  control={control}
+                  defaultValue=""
+                  rules={{
+                    required: {
+                      value: true,
+                      message: "This field is required",
+                    },
+                  }}
+                  render={({ field }) => (
+                    <>
+                      <Select
+                        disabled={!isEditingProcess || !isDraftingNewVersion}
+                        {...field}
+                        labelId="period-label"
+                        id="period-input"
+                        // onClick={() =>
+                        //   setShowChoosePositionModal((prevState) => ({
+                        //     ...prevState,
+                        //     intent: true,
+                        //   }))
+                        // }
+                        input={<OutlinedInput label="Period" />}
+                      >
+                        {periods.map((option) => (
+                          <MenuItem
+                            key={option.value.id}
+                            value={option.value.id}
+                          >
+                            <ListItemText primary={option.label} />
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <FormHelperText error={errors.period}>
+                        {errors &&
+                          errors.period &&
+                          errors.period.type === "required" &&
+                          "This field is required"}
+                      </FormHelperText>
+                    </>
+                  )}
+                />
+              </FormControl>
+            ) : (
+              <FormControl fullWidth>
+                <InputLabel id="phase-label">Phase</InputLabel>
+                <Controller
+                  name="phase_list"
+                  control={control}
+                  defaultValue={[]}
+                  rules={{
+                    required: {
+                      value: true,
+                      message: "This field is required",
+                    },
+                    validate: {
+                      hasPrerequisites: (value) => {
+                        if (!phaseChanged) {
+                          return true;
+                        }
+
+                        return (
+                          (milestone.relationships.prerequisites?.data
+                            ?.length || 0) === 0 ||
+                          "Cannot submit if there are prerequisites"
+                        );
+                      },
+                    },
+                  }}
+                  render={({ field }) => (
+                    <>
+                      <Select
+                        disabled={!isEditingProcess || !isDraftingNewVersion}
+                        {...field}
+                        labelId="phase-label"
+                        id="phase"
+                        onClick={() =>
+                          setShowChoosePositionModal((prevState) => ({
+                            ...prevState,
+                            intent: true,
+                          }))
+                        }
+                        input={<OutlinedInput label="Phase" />}
+                      >
+                        {phases.map((option) => (
+                          <MenuItem key={option.value} value={option.value}>
+                            <ListItemText primary={option.label} />
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <FormHelperText error={errors.phase_list}>
+                        {errors &&
+                          errors.phase_list &&
+                          ((errors.phase_list.type === "required" &&
+                            "This field is required") ||
+                            (errors.phase_list.type === "hasPrerequisites" &&
+                              "Remove prerequisites to update the phase of this process"))}
+                      </FormHelperText>
+                    </>
+                  )}
+                />
+              </FormControl>
+            )}
+          </Stack>
+
+          {isRecurring ? null : (
+            <Card sx={{ padding: 0 }}>
+              <List
+                subheader={
+                  <ListSubheader
+                    component="div"
+                    id="nested-list-subheader"
+                    sx={{ background: "#eaeaea" }}
+                  >
+                    <Grid container justifyContent="space-between">
+                      <Grid item>Prerequisite</Grid>
+                      <Grid item>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          disabled={!isDraftingNewVersion || !isEditingProcess}
+                          onClick={() => setShowAddPrerequisiteModal(true)}
+                        >
+                          Add Prerequisite
+                        </Button>
+                      </Grid>
+                    </Grid>
+                  </ListSubheader>
+                }
+              >
+                {isLoading
+                  ? Array.from({ length: 1 }).map((_, index) => (
+                      <ListItem key={index} divider>
+                        <ListItemText>
+                          <Skeleton variant="text" width={120} />
+                        </ListItemText>
+                      </ListItem>
+                    ))
+                  : milestone.relationships.prerequisites.data.map((p, i) => (
+                      <ListItem
+                        key={i}
+                        disablePadding
+                        secondaryAction={
+                          <Button
+                            id={`remove-prerequisite-${i}`}
+                            variant="text"
+                            color="error"
+                            disabled={!isEditingProcess}
+                            onClick={() =>
+                              handleDeleteDependency(
+                                milestone?.relationships.workableDependencies.data.find(
+                                  (d) =>
+                                    d.attributes.prerequisiteWorkableId.toString() ===
+                                    p.id
+                                ).id
+                              )
+                            }
+                          >
+                            Remove
+                          </Button>
+                        }
+                      >
+                        <ListItemButton disabled>
+                          <ListItemText>{p.attributes.title}</ListItemText>
+                        </ListItemButton>
+                      </ListItem>
+                    ))}
+              </List>
+            </Card>
+          )}
+
+          {/* STEPS */}
+          <Card sx={{ overflow: "visible", padding: 0 }}>
+            <List
+              subheader={
+                <ListSubheader
+                  component="div"
+                  id="nested-list-subheader"
+                  sx={{ background: "#eaeaea" }}
+                >
+                  <Grid container justifyContent="space-between">
+                    <Grid item>Steps</Grid>
+                    {isLoading ? (
+                      <Skeleton variant="text" width={120} />
+                    ) : milestone.relationships.steps.data.length ? null : (
+                      <Grid item>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          disabled={!isDraftingNewVersion || !isEditingProcess}
+                          onClick={() => handleStageAddStep(1000)}
+                        >
+                          Add step
+                        </Button>
+                      </Grid>
+                    )}
+                  </Grid>
+                </ListSubheader>
+              }
+            >
+              {isLoading ? (
+                Array.from({ length: 3 }).map((_, index) => (
+                  <ListItem key={index} divider>
+                    <ListItemText>
+                      <Skeleton variant="text" width={120} />
+                    </ListItemText>
+                  </ListItem>
+                ))
+              ) : (
+                <DraggableList
+                  items={milestone.relationships.steps.data}
+                  onReorder={(
+                    stepId,
+                    priorItemPosition,
+                    subsequentItemPosition
+                  ) => {
+                    handleRepositionStep(
+                      stepId,
+                      priorItemPosition,
+                      subsequentItemPosition
+                    );
+                  }}
+                  getId={(item) => item.id}
+                  getPosition={(item) => item.attributes.position}
+                  renderItem={(step, i) => (
+                    <StepListItem
+                      workflowId={workflowId}
+                      key={step.id}
+                      step={step}
+                      isEditingProcess={isEditingProcess}
+                      isDraftingNewVersion={isDraftingNewVersion}
+                      prevStepPosition={
+                        i > 0 &&
+                        milestone.relationships.steps.data[i - 1].attributes
+                          .position
+                      }
+                      isLast={
+                        i === milestone.relationships.steps.data.length - 1
+                      }
+                      // handleRemoveStep={handleRemoveStep}
+                      handleStageAddStep={handleStageAddStep}
+                    />
+                  )}
+                />
+              )}
+            </List>
+          </Card>
+        </Stack>
+      </form>
+      <EditLanguageModal
+        open={showEditLanguageModal}
+        onClose={() => setShowEditLanguageModal(false)}
+        milestone={milestone}
+        workflowId={workflowId}
+      />
+      {isRecurring ? null : (
+        <ChoosePositionModal
+          open={Boolean(
+            showChoosePositionModal.state &&
+              milestone?.relationships?.selectedProcesses?.data?.length &&
+              phaseListField
+          )}
+          onClose={() =>
+            setShowChoosePositionModal((prevState) => ({
+              ...prevState,
+              intent: false,
+              state: false,
+            }))
+          }
+          handleChoosePosition={handleChoosePosition}
+          workflow={workflow}
+          milestone={milestone}
+          stagedPhase={phaseListField ? phaseListField : null}
+        />
+      )}
+      <AddPrerequisiteModal
+        open={showAddPrerequisiteModal}
+        onClose={() => setShowAddPrerequisiteModal(false)}
+        handleAddPrerequisite={handleAddPrerequisite}
+        workflow={workflow}
+        milestone={milestone}
+      />
+      <AddStepModal
+        open={addStepModalOpen}
+        addStepPosition={addStepPosition}
+        handleCreateStep={handleCreateStep}
+        onClose={() => {
+          setAddStepModalOpen(false);
+          setShowChoosePositionModal((prevState) => ({
+            ...prevState,
+            intent: false,
+            state: false,
+          }));
+        }}
+        isRecurring={isRecurring}
+      />
+      <Snackbar
+        autoHideDuration={1000}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        open={repositionedSnackbarOpen}
+        onClose={() => setRepositionedSnackbarOpen(false)}
+        message="Step repositioned and saved."
+      />
+      <Snackbar
+        autoHideDuration={1000}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        open={updatedProcessSnackbarOpen}
+        onClose={() => setUpdatedProcessSnackbarOpen(false)}
+        message="Process updated."
+      />
+    </PageContainer>
+  );
+};
+
+export default ProcessId;
+
+const AddPrerequisiteModal = ({
+  open,
+  onClose,
+  handleAddPrerequisite,
+  workflow,
+  milestone,
+}) => {
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth>
+      <DialogTitle>Add Prerequisite</DialogTitle>
+      <DialogContent>
+        <Card sx={{ padding: 0 }} variant="outlined">
+          <ChoosePrerequisiteList
+            handleAddPrerequisite={handleAddPrerequisite}
+            workflow={workflow}
+            milestone={milestone}
+          />
+        </Card>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const AddStepModal = ({
+  open,
+  addStepPosition,
+  handleCreateStep,
+  onClose,
+  isRecurring,
+}) => {
+  const handleClose = () => {
+    onClose();
+  };
+
+  const {
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors, isDirty },
+  } = useForm();
+
+  useEffect(() => {
+    reset({
+      position: addStepPosition,
+    });
+  }, [open]);
+
+  const onSubmit = handleSubmit((data) => {
+    // console.log({ data });
+    handleCreateStep(data);
+    reset();
+    onClose();
+  });
+  return (
+    <Dialog open={open} onClose={handleClose} fullWidth scroll="paper">
+      <DialogTitle>Add Step</DialogTitle>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <DialogContent>
+          <Controller
+            name="position"
+            control={control}
+            defaultValue=""
+            render={({ field }) => <input type="hidden" {...field} />}
+          />
+          <StepFields
+            control={control}
+            errors={errors}
+            isRecurring={isRecurring}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button type="submit" disabled={!isDirty}>
+            Create Step
+          </Button>
+          {/* Step add button */}
+        </DialogActions>
+      </form>
+    </Dialog>
+  );
+};
+
+const StepListItem = ({
+  isEditingProcess,
+  isDraftingNewVersion,
+  handleStageAddStep,
+  prevStepPosition,
+  step,
+  isLast,
+  workflowId,
+}) => {
+  const [showRemoveStepCheck, setShowRemoveStepCheck] = useState(false);
+  const [stepCheckValue, setSetepCheckValue] = useState(null);
+  const [deleteStepCheck, setDeleteStepCheck] = useState("");
+  // console.log({ prevStepPosition });
+  const router = useRouter();
+  const processId = router.query.processId;
+
+  const position = isLast
+    ? step.attributes.position + 1000
+    : (step.attributes.position + prevStepPosition) / 2;
+  const lastStepPosition = step.attributes.position + 1000;
+
+  // console.log({ step });
+
+  const { listeners, attributes, isDragging } = useSortable({ id: step.id });
+
+  const PositionGrabber = ({ ...props }) => {
+    return (
+      <Stack {...props} id={`drag-handle-${snakeCase(step.attributes.title)}`}>
+        <DragHandle />
+      </Stack>
+    );
+  };
+
+  const handleRemoveStep = async (stepId) => {
+    // console.log("Remove step", stepId);
+    setShowRemoveStepCheck(false);
+    try {
+      const response = await stepsApi.deleteStep(processId, stepId);
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  // handleRemoveStep(step.id);
+  return (
+    <ListItem
+      disablePadding
+      divider
+      secondaryAction={
+        !isEditingProcess ? null : (
+          <Button
+            variant="text"
+            color="error"
+            onClick={(e) => {
+              setSetepCheckValue(step);
+              setShowRemoveStepCheck(true);
+            }}
+            id={`remove-step-${snakeCase(step.attributes.title)}`}
+          >
+            Remove
+          </Button>
+        )
+      }
+      sx={{ background: "white", opacity: isDragging ? 0.5 : 1 }}
+    >
+      <InlineActionTile
+        isLast={isLast}
+        disabled={isDraftingNewVersion && !isEditingProcess}
+        id={`inline-action-tile-${snakeCase(step.attributes.title)}`}
+        showAdd={isDraftingNewVersion && isEditingProcess}
+        status="default"
+        add={() => handleStageAddStep(position, step.id)}
+        lastAdd={() => handleStageAddStep(lastStepPosition, step.id)}
+        dragHandle={<PositionGrabber {...listeners} {...attributes} />}
+      />
+      <ListItemButton
+        disabled={isDraftingNewVersion && !isEditingProcess}
+        onClick={() =>
+          router.push(
+            `/admin/workflows/processes/${processId}/steps/${step.id}`
+          )
+        }
+      >
+        <Stack direction="row" spacing={3} alignItems="center">
+          <ListItemText>
+            <Typography variant="bodyRegular">
+              {step.attributes.title}
+            </Typography>
+          </ListItemText>
+          {step.attributes.maxWorktime ? (
+            <Chip label={step.attributes.maxWorktime} size="small" />
+          ) : null}
+          <Chip
+            label={
+              step.attributes.completionType === "each_person"
+                ? "Individual"
+                : "Collaborative"
+            }
+            size="small"
+          />
+          <Chip
+            label={step.attributes.kind === "default" ? "Default" : "Decision"}
+            size="small"
+          />
+          {step.relationships.documents.data.length ? (
+            <Chip
+              label={`${step.relationships.documents.data.length} Resource`}
+              size="small"
+            />
+          ) : null}
+        </Stack>
+      </ListItemButton>
+      <Dialog
+        fullWidth
+        open={showRemoveStepCheck}
+        onClose={() => setShowRemoveStepCheck(false)}
+      >
+        <DialogTitle>
+          {showRemoveStepCheck
+            ? `Remove "${stepCheckValue?.attributes.title}"`
+            : null}
+        </DialogTitle>
+        <DialogContent>
+          <Stack mt={3} spacing={3}>
+            <TextField
+              fullWidth
+              name="delete_step_check"
+              value={deleteStepCheck}
+              onChange={(e) => setDeleteStepCheck(e.target.value)}
+              label="To remove, type the step title"
+              placeholder="e.g. Step Title"
+            />
+            <Stack direction="row" spacing={3}>
+              <Warning color="primary" />
+              <Typography variant="bodyRegular">
+                Note that once removed, a step is gone and cannot be retrieved.
+                If you need the content of this step you should save it
+                elsewhere first.
+              </Typography>
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => handleRemoveStep(step.id)}
+            color="error"
+            disabled={
+              showRemoveStepCheck &&
+              deleteStepCheck !== stepCheckValue?.attributes.title
+            }
+          >
+            Remove
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </ListItem>
+  );
+};
+
+const categories = Object.values(ssj_categories).map((category) => ({
+  label: category,
+  value: category,
+}));
+const phases = [
+  { label: "Visioning", value: "visioning" },
+  { label: "Planning", value: "planning" },
+  { label: "Startup", value: "startup" },
+];
+
+const StepFields = ({ control, errors, isRecurring }) => {
+  return (
+    <Stack spacing={6}>
+      <Controller
+        name="title"
+        control={control}
+        defaultValue=""
+        rules={{
+          required: {
+            value: true,
+            message: "This field is required",
+          },
+        }}
+        render={({ field }) => (
+          <TextField
+            label="Title"
+            placeholder="e.g. Complete The Visioning Advice Process"
+            error={errors.title}
+            helperText={errors && errors.title && errors.title.message}
+            {...field}
+          />
+        )}
+      />
+      <Controller
+        name="description"
+        control={control}
+        defaultValue=""
+        rules={{
+          required: {
+            value: true,
+            message: "This field is required",
+          },
+        }}
+        render={({ field }) => (
+          <TextField
+            multiline
+            label="Description"
+            placeholder="The description of this step"
+            error={errors.description}
+            helperText={
+              errors && errors.description && errors.description.message
+            }
+            {...field}
+          />
+        )}
+      />
+
+      <Controller
+        name="max_worktime"
+        control={control}
+        defaultValue=""
+        // rules={{
+        //   required: {
+        //     value: true,
+        //     message: "This field is required",
+        //   },
+        // }}
+        render={({ field }) => (
+          <TextField
+            label="Worktime (in minutes)"
+            placeholder="e.g. 60 for 1 hour"
+            error={errors.max_worktime}
+            helperText={
+              errors && errors.max_worktime && errors.max_worktime.message
+            }
+            {...field}
+          />
+        )}
+      />
+
+      <Stack spacing={2}>
+        <Typography variant="bodyRegular">Assignment</Typography>
+        <Controller
+          name="completion_type"
+          defaultValue=""
+          control={control}
+          rules={{ required: true, message: "This field is required" }}
+          render={({ field: { onChange, value } }) => (
+            <RadioGroup value={value}>
+              <FormControlLabel
+                value="each_person"
+                control={<Radio />}
+                label={
+                  "Individual (everyone can assign - everyone should complete)"
+                }
+                onChange={onChange}
+              />
+              <FormControlLabel
+                value="one_per_group"
+                control={<Radio />}
+                label={
+                  "Collaborative (everyone can assign - only one can complete per group)"
+                }
+                onChange={onChange}
+              />
+              <FormHelperText error={errors.completion_type}>
+                {errors &&
+                  errors.completion_type &&
+                  errors.completion_type.type === "required" &&
+                  "This field is required"}
+              </FormHelperText>
+            </RadioGroup>
+          )}
+        />
+      </Stack>
+
+      <Controller
+        name="kind"
+        defaultValue="default"
+        control={control}
+        render={({ field }) => (
+          <FormControlLabel
+            label="Is decision"
+            control={
+              <Switch
+                label="Kind"
+                checked={field.value === "decision"}
+                disabled={isRecurring}
+                onChange={(e) =>
+                  field.onChange(e.target.checked ? "decision" : "default")
+                }
+              />
+            }
+          />
+        )}
+      />
+    </Stack>
+  );
+};
+
+const ChoosePrerequisiteList = ({
+  handleAddPrerequisite,
+  workflow,
+  milestone,
+}) => {
+  //  TODO: get the workflow, show processes from that workflow, and then filter out processes greater than the current processes position
+
+  // console.log({ workflow });
+
+  const milestonePosition =
+    milestone.relationships.selectedProcesses.data[0].attributes.position;
+
+  const filteredProcesses = workflow.relationships.processes.data.filter(
+    (process) =>
+      process.relationships.selectedProcesses.data[0].attributes.position <
+        milestonePosition &&
+      process.relationships.selectedProcesses.data[0].attributes.state !==
+        "removed"
+  );
+
+  // console.log({ filteredProcesses });
+
+  return (
+    <List>
+      {!filteredProcesses ? (
+        Array.from({ length: 12 }).map((_, index) => (
+          <ListItem key={index} divider>
+            <ListItemText>
+              <Skeleton variant="text" width={120} />
+            </ListItemText>
+          </ListItem>
+        ))
+      ) : !filteredProcesses.length ? (
+        <ListItem divider>
+          <ListItemText>
+            <Typography variant="bodyRegular">
+              No prerequisites available
+            </Typography>
+          </ListItemText>
+        </ListItem>
+      ) : (
+        filteredProcesses?.map((process, i) => (
+          <ListItem disablePadding divider key={i}>
+            <ListItemButton onClick={() => handleAddPrerequisite(process.id)}>
+              <Stack direction="row" spacing={3} alignItems="center">
+                <ListItemText>
+                  <Typography noWrap>{process.attributes.title}</Typography>
+                </ListItemText>
+                <Chip
+                  label={`${process.attributes.phase}`}
+                  size="small"
+                  variant="outlined"
+                />
+                <Chip
+                  label={`${process.attributes.numOfSteps} steps`}
+                  size="small"
+                />
+                {process.attributes.categories.map((c, i) => (
+                  <CategoryChip category={c} key={i} size="small" />
+                ))}
+              </Stack>
+            </ListItemButton>
+          </ListItem>
+        ))
+      )}
+    </List>
+  );
+};
+
+const ChoosePositionModal = ({
+  open,
+  onClose,
+  handleChoosePosition,
+  workflow,
+  milestone,
+  stagedPhase,
+}) => {
+  // console.log(stagedPhase);
+
+  const currentProcessSelectedProcessId =
+    milestone?.relationships?.selectedProcesses?.data?.[0]?.id ?? null;
+
+  return (
+    <Dialog open={open} fullWidth>
+      <DialogTitle>Choose new position</DialogTitle>
+      <DialogContent>
+        <Card sx={{ overflow: "visible", padding: 0 }}>
+          <ChoosePositionList
+            currentProcessSelectedProcessId={currentProcessSelectedProcessId}
+            onClose={onClose}
+            stagedPhase={stagedPhase}
+            workflow={workflow}
+            milestone={milestone}
+            handleChoosePosition={handleChoosePosition}
+          />
+        </Card>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const ChoosePositionList = ({
+  stagedPhase,
+  workflow,
+  handleChoosePosition,
+  onClose,
+  currentProcessSelectedProcessId,
+}) => {
+  const stagedPhaseProcessesArray =
+    workflow.relationships.processes.data.filter(
+      (process) => process.attributes.phase === stagedPhase
+    );
+  // console.log({ stagedPhaseProcessesArray });
+
+  // for the selected phase, show only the phase milestones
+  // use handleChoosePosition with the plus buttons to add a position in the new phase
+  // close the modal on selection of position
+  // clear any prereqs
+
+  return (
+    <List
+      subheader={
+        <ListSubheader
+          component="div"
+          id="nested-list-subheader"
+          sx={{ background: "#eaeaea" }}
+        >
+          {stagedPhase.charAt(0).toUpperCase() + stagedPhase.slice(1)}
+        </ListSubheader>
+      }
+    >
+      {stagedPhaseProcessesArray.map((process, i) => (
+        <ChoosePositionListItem
+          currentProcessSelectedProcessId={currentProcessSelectedProcessId}
+          onClose={onClose}
+          isLast={i === stagedPhaseProcessesArray.length - 1}
+          workflow={workflow}
+          handleChoosePosition={handleChoosePosition}
+          process={process}
+          key={i}
+          phase={stagedPhase}
+        />
+      ))}
+    </List>
+  );
+};
+
+const ChoosePositionListItem = ({
+  workflow,
+  handleChoosePosition,
+  process,
+  isLast,
+  phase,
+  onClose,
+  currentProcessSelectedProcessId,
+}) => {
+  // console.log({ workflow });
+
+  const selectedProcesses = process.relationships.selectedProcesses?.data;
+
+  const currentProcessIndex = workflow?.relationships.processes.data.findIndex(
+    (process) =>
+      process.relationships.selectedProcesses.data[0].id ===
+      selectedProcesses[0].id
+  );
+
+  const prevProcessPosition = workflow?.relationships.processes.data[
+    currentProcessIndex - 1
+  ]
+    ? workflow?.relationships.processes.data[currentProcessIndex - 1]
+        .relationships.selectedProcesses.data[0].attributes.position
+    : null;
+
+  const subsequentProcess =
+    workflow?.relationships.processes.data[currentProcessIndex + 1];
+
+  const processPosition =
+    (selectedProcesses[0].attributes.position + prevProcessPosition) / 2;
+
+  let lastProcessPosition;
+  if (subsequentProcess) {
+    lastProcessPosition =
+      (selectedProcesses[0].attributes.position +
+        subsequentProcess.relationships.selectedProcesses.data[0].attributes
+          .position) /
+      2;
+  } else {
+    lastProcessPosition = selectedProcesses[0].attributes.position + 1000;
+  }
+
+  // console.log(processPosition);
+  // console.log(selectedProcesses);
+  // console.log(lastProcessPosition);
+
+  return (
+    <ListItem disablePadding divider>
+      <InlineActionTile
+        disabled
+        isLast={isLast}
+        id={`inline-action-tile-${snakeCase(process.attributes.title)}`}
+        showAdd={true}
+        add={() => {
+          handleChoosePosition(
+            processPosition,
+            phase,
+            currentProcessSelectedProcessId
+          );
+          onClose();
+        }}
+        lastAdd={() => {
+          handleChoosePosition(
+            lastProcessPosition,
+            phase,
+            currentProcessSelectedProcessId
+          );
+          onClose();
+        }}
+      />
+      <ListItemButton disabled>
+        <ListItemText>
+          <Typography variant="bodyRegular">
+            {process.attributes.title}
+          </Typography>
+        </ListItemText>
+        <Chip label={`${process.attributes.numOfSteps} steps`} size="small" />
+        {process.attributes.categories.map((c, i) => (
+          <CategoryChip category={c} key={i} size="small" />
+        ))}
+      </ListItemButton>
+    </ListItem>
+  );
+};
+
+const EditLanguageModal = ({ open, onClose, milestone, workflowId }) => {
+  const [currentFieldGroup, setCurrentFieldGroup] = useState(["process", null]);
+  const [submitForm, setSubmitForm] = useState(() => () => {});
+  const [formIsDirty, setFormIsDirty] = useState(false);
+
+  // set the current field group to display when milestone is loaded
+  useEffect(() => {
+    if (milestone?.id) {
+      setCurrentFieldGroup(["process", milestone.id]);
+    }
+  }, [milestone?.id]);
+
+  // render the correct field group based on the current field group
+  const renderFieldGroup = () => {
+    const [type, id] = currentFieldGroup;
+    const key = `${type}-${id}`;
+    switch (type) {
+      case "process":
+        return (
+          <TranslateProcessFields
+            key={key}
+            processId={id}
+            milestone={milestone}
+            workflowId={workflowId}
+            setSubmitForm={setSubmitForm}
+            setFormIsDirty={setFormIsDirty}
+          />
+        );
+      case "step":
+        return (
+          <TranslateStepFields
+            key={key}
+            stepId={id}
+            processId={milestone?.id}
+            workflowId={workflowId}
+            setSubmitForm={setSubmitForm}
+            setFormIsDirty={setFormIsDirty}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
+  // handle the change of the field group
+  const handleChangeFieldGroup = (type, id) => {
+    setCurrentFieldGroup([type, id]);
+  };
+
+  const handleClose = () => {
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={handleClose} fullWidth scroll="paper">
+      <DialogTitle>Add Translations</DialogTitle>
+      <DialogContent
+        sx={{ paddingLeft: "224px", minHeight: "480px", maxHeight: "480px" }}
+        dividers
+      >
+        <Drawer
+          variant="permanent"
+          anchor="left"
+          PaperProps={{
+            style: {
+              position: "absolute",
+              top: 64,
+              boxSizing: "border-box",
+              width: "200px",
+              height: "calc(100% - 64px)",
+              borderLeft: "none",
+              borderBottom: "none",
+              padding: 0,
+            },
+          }}
+        >
+          <List>
+            <ListItem
+              disablePadding
+              sx={{
+                background:
+                  milestone?.id === currentFieldGroup[1] ? "#fafafa" : null,
+              }}
+            >
+              <ListItemButton
+                onClick={() => handleChangeFieldGroup("process", milestone.id)}
+              >
+                <ListItemText
+                  sx={{
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {milestone?.attributes.title}
+                </ListItemText>
+              </ListItemButton>
+            </ListItem>
+            {milestone?.relationships?.steps?.data.length ? (
+              <>
+                <ListSubheader>Steps</ListSubheader>
+                {milestone?.relationships?.steps?.data.map((step, i) => (
+                  <ListItem
+                    disablePadding
+                    key={i}
+                    sx={{
+                      background:
+                        step.id === currentFieldGroup[1] ? "#fafafa" : null,
+                    }}
+                  >
+                    <ListItemButton
+                      onClick={() => handleChangeFieldGroup("step", step.id)}
+                    >
+                      <ListItemText
+                        sx={{
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {step.attributes.title}
+                      </ListItemText>
+                    </ListItemButton>
+                  </ListItem>
+                ))}
+              </>
+            ) : null}
+          </List>
+        </Drawer>
+        <DialogContentText>{renderFieldGroup()}</DialogContentText>
+      </DialogContent>
+      <DialogActions sx={{ paddingLeft: "200px" }}>
+        <Stack direction="row" spacing={3}>
+          <Button variant="text" size="small" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            type="submit"
+            onClick={() => submitForm()}
+            disabled={!formIsDirty}
+          >
+            Save
+          </Button>
+        </Stack>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+const TranslateProcessFields = ({
+  milestone,
+  processId,
+  workflowId,
+  setSubmitForm,
+  setFormIsDirty,
+}) => {
+  const {
+    control,
+    handleSubmit,
+    reset,
+    formState: { errors, isDirty, isSubmitting },
+  } = useForm({
+    mode: "onChange",
+    defaultValues: {},
+  });
+
+  useEffect(() => {
+    reset({
+      process_title_es: milestone?.attributes.titleEs,
+      process_description_es: milestone?.attributes.descriptionEs,
+    });
+  }, [milestone]);
+
+  useEffect(() => {
+    setFormIsDirty(isDirty);
+  }, [isDirty, setFormIsDirty]);
+
+  const handleUpdateProcessTranslation = async (data) => {
+    const structuredData = {
+      title_es: data.process_title_es,
+      description_es: data.process_description_es,
+    };
+    try {
+      const response = await processApi.editMilestone(
+        processId,
+        structuredData
+      );
+      mutate(`definition/workflows/${workflowId}/processes/${processId}`);
+      reset({
+        process_title_es: data.process_title_es,
+        process_description_es: data.process_description_es,
+      });
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  useEffect(() => {
+    setSubmitForm(() => handleSubmit(handleUpdateProcessTranslation));
+  }, [handleSubmit, handleUpdateProcessTranslation, setSubmitForm]);
+
+  return (
+    <form>
+      <Stack spacing={3}>
+        <TranslateCard
+          displayName="Title"
+          fieldDefault={milestone.attributes.title}
+          langToTranslate="Spanish"
+          name="process_title_es"
+          control={control}
+        />
+        <TranslateCard
+          displayName="Description"
+          fieldDefault={milestone.attributes.description}
+          langToTranslate="Spanish"
+          name="process_description_es"
+          control={control}
+        />
+      </Stack>
+    </form>
+  );
+};
+
+const TranslateStepFields = ({
+  processId,
+  stepId,
+  setSubmitForm,
+  setFormIsDirty,
+}) => {
+  const [resourceParams, setResourceParams] = useState([]);
+  const [decisionOptionParams, setDecisionOptionParams] = useState([]);
+  const { step, isLoading } = useStep(processId, stepId);
+
+  const {
+    control,
+    handleSubmit,
+    watch,
+    reset,
+    formState: { errors, isDirty, isSubmitting },
+  } = useForm({
+    mode: "onChange",
+    defaultValues: {},
+  });
+
+  useEffect(() => {
+    if (step) {
+      reset({
+        title_es: step.attributes.titleEs,
+        description_es: step.attributes.descriptionEs,
+        decision_question_es: step.attributes.decisionQuestionEs,
+        ...step.relationships.documents.data.reduce((acc, doc) => {
+          acc[`resource_title_es_${doc.id}`] = doc.attributes.titleEs;
+          acc[`resource_id_${doc.id}`] = doc.id;
+          return acc;
+        }, {}),
+        ...step.relationships.decisionOptions.data.reduce((acc, option) => {
+          acc[`decision_option_es_${option.id}`] =
+            option.attributes.descriptionEs;
+          acc[`decision_option_id_${option.id}`] = option.id;
+          return acc;
+        }, {}),
+      });
+    }
+  }, [step, reset]);
+
+  useEffect(() => {
+    setFormIsDirty(isDirty);
+  }, [isDirty, setFormIsDirty]);
+
+  const formValues = watch();
+
+  useEffect(() => {
+    const data = step?.relationships.documents.data.map((doc, i) => ({
+      id: formValues[`resource_id_${doc.id}`],
+      title_es: formValues[`resource_title_es_${doc.id}`],
+    }));
+    setResourceParams((prevData) => {
+      if (JSON.stringify(prevData) !== JSON.stringify(data)) {
+        return data;
+      }
+      return prevData;
+    });
+  }, [formValues, step, setResourceParams]);
+
+  useEffect(() => {
+    const data = step?.relationships.decisionOptions.data.map((dec, i) => ({
+      id: formValues[`decision_option_id_${dec.id}`],
+      description_es: formValues[`decision_option_es_${dec.id}`],
+    }));
+    setDecisionOptionParams((prevData) => {
+      if (JSON.stringify(prevData) !== JSON.stringify(data)) {
+        return data;
+      }
+      return prevData;
+    });
+  }, [formValues, step, setDecisionOptionParams]);
+
+  const handleUpdateStepTranslation = async (data) => {
+    const filteredData = Object.keys(formValues).reduce((acc, key) => {
+      if (
+        !key.startsWith("decision_option_es_") &&
+        !key.startsWith("decision_option_id_") &&
+        !key.startsWith("resource_title_es_") &&
+        !key.startsWith("resource_id_")
+      ) {
+        acc[key] = formValues[key];
+      }
+      return acc;
+    }, {});
+    const structuredData = {
+      step: {
+        ...filteredData,
+      },
+    };
+    if (resourceParams.length > 0) {
+      structuredData.step.documents_attributes = [...resourceParams];
+    }
+    if (decisionOptionParams.length > 0) {
+      structuredData.step.decision_options_attributes = [
+        ...decisionOptionParams,
+      ];
+    }
+    try {
+      const response = await stepsApi.editStep(
+        processId,
+        stepId,
+        structuredData
+      );
+      mutate(`/definition/processes/${processId}/steps/${stepId}`);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  useEffect(() => {
+    setSubmitForm(() => handleSubmit(handleUpdateStepTranslation));
+  }, [handleSubmit, handleUpdateStepTranslation, setSubmitForm]);
+
+  return isLoading ? (
+    <Stack
+      sx={{ width: "100%", height: "320px" }}
+      alignItems="center"
+      justifyContent="center"
+    >
+      <CircularProgress />
+    </Stack>
+  ) : (
+    <form>
+      <Stack spacing={3}>
+        <TranslateCard
+          displayName="Title"
+          fieldDefault={step.attributes.title}
+          langToTranslate="Spanish"
+          name={"title_es"}
+          control={control}
+          key={`${step?.id}-titleEs`}
+        />
+        <TranslateCard
+          displayName="Description"
+          fieldDefault={step.attributes.description}
+          langToTranslate="Spanish"
+          name="description_es"
+          control={control}
+          key={`${step?.id}-descriptionEs`}
+        />
+        {step.relationships.documents.data.length ? (
+          <>
+            <Typography bold>Resources</Typography>
+            {step.relationships.documents.data.map((doc, i) => (
+              <>
+                <TranslateCard
+                  key={doc.id}
+                  displayName="Resource Title"
+                  fieldDefault={doc.attributes.title}
+                  langToTranslate="Spanish"
+                  name={`resource_title_es_${doc.id}`}
+                  control={control}
+                />
+                <Controller
+                  name={`resource_id_${doc.id}`}
+                  control={control}
+                  render={({ field }) => <input type="hidden" {...field} />}
+                />
+              </>
+            ))}
+          </>
+        ) : null}
+        {step.attributes.kind === "decision" ? (
+          <>
+            <Typography bold>Decisions</Typography>
+            <TranslateCard
+              displayName="Decision Question"
+              fieldDefault={step.attributes.decisionQuestion}
+              langToTranslate="Spanish"
+              name="decision_question_es"
+              control={control}
+            />
+            {step.relationships.decisionOptions.data.map((option, i) => (
+              <>
+                <TranslateCard
+                  key={i}
+                  displayName="Decision Option"
+                  fieldDefault={option.attributes.description}
+                  langToTranslate="Spanish"
+                  name={`decision_option_es_${option.id}`}
+                  control={control}
+                />
+                <Controller
+                  name={`decision_option_id_${option.id}`}
+                  control={control}
+                  render={({ field }) => <input type="hidden" {...field} />}
+                />
+              </>
+            ))}
+          </>
+        ) : null}
+      </Stack>
+    </form>
+  );
+};
+
+const TranslateCard = ({
+  displayName,
+  fieldDefault,
+  langToTranslate,
+  name,
+  control,
+}) => {
+  return (
+    <Card>
+      <Box sx={{ background: "#fafafa", padding: 3 }}>
+        <Stack>
+          <Typography variant="bodyRegular" bold lightened>
+            {displayName}
+          </Typography>
+          <Typography variant="bodyRegular">{fieldDefault}</Typography>
+        </Stack>
+      </Box>
+      <Box sx={{ padding: 3 }}>
+        <Controller
+          name={name}
+          control={control}
+          render={({ field }) => (
+            <TextField
+              label={langToTranslate}
+              size="small"
+              fullWidth
+              multiline
+              {...field}
+            />
+          )}
+        />
+      </Box>
+    </Card>
+  );
+};
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+
+export async function getServerSideProps({ locale }) {
+  return {
+    props: {
+      ...(await serverSideTranslations(locale, ["common"])),
+      // Add any additional props you need to pass to the page component
+    },
+  };
+}

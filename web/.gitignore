@@ -1,0 +1,21 @@
+.history
+
+node_modules
+
+.DS_STORE
+
+yarn-error.log
+
+/.next/
+/out/
+.vercel
+
+.env.local
+
+cypress/videos
+cypress/screenshots
+
+# Cursor IDE
+.cursor/
+.cursorrules
+Wildflower.code-workspace

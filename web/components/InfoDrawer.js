@@ -1,0 +1,273 @@
+import { useRouter } from "next/router";
+import { styled } from "@mui/material/styles";
+import { Drawer } from "@mui/material";
+import { useTranslation } from "next-i18next";
+
+import {
+  Card,
+  Typography,
+  Stack,
+  Grid,
+  Icon,
+  IconButton,
+  Chip,
+  Divider,
+  Avatar,
+  Box,
+  Badge,
+} from "./ui/index";
+import WorktimeChip from "./WorktimeChip";
+import CategoryChip from "./CategoryChip";
+import StatusChip from "./StatusChip";
+import Resource from "./Resource";
+import AssigneeRoster from "@components/AssigneeRoster";
+import { useUserContext } from "@lib/useUserContext";
+import { getScreenSize } from "@hooks/react-responsive";
+import { getTranslatedAttr } from "@lib/utils/getTranslatedAttr";
+
+const CustomDrawer = styled(Drawer)`
+  .MuiDrawer-paper {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    margin: 0;
+    flex-shrink: 0;
+    z-index: 1;
+    outline: 1px solid ${({ theme }) => theme.color.neutral.main};
+    border: none;
+    margin-top: 0;
+    width: ${({ theme }) => theme.util.infoDrawerWidth}px;
+    height: ${({ theme }) => `100vh - ${theme.util.appBarHeight}px`};
+
+    @media (max-width: 600px) {
+      width: 95vw;
+    }
+  }
+`;
+
+const StyledInfoCard = styled(Card)`
+  overflow-y: scroll;
+`;
+const ActionsContainer = styled(Card)`
+  position: sticky;
+  bottom: 0;
+  border-top: 1px solid ${({ theme }) => theme.color.neutral.main};
+  width: 100%;
+  padding: ${({ theme }) => theme.util.buffer * 6}px;
+  overflow: visible;
+`;
+
+const InfoDrawer = ({
+  toggle,
+  open,
+  assignees,
+  completers,
+  about,
+  taskId,
+  title,
+  status,
+  resources,
+  categories,
+  actions,
+  isDecision,
+  taskIsComplete,
+  worktime,
+  handleAssignUser,
+  handleUnassignUser,
+  assignableUsers,
+  completionType,
+  processName,
+}) => {
+  const { t } = useTranslation("common");
+  const { screenSize } = getScreenSize();
+  const { currentUser, isOperationsGuide } = useUserContext();
+
+  const router = useRouter();
+  const { workflow } = router.query;
+
+  const isTL = currentUser?.personRoleList.some(
+    (role) => role === "Teacher Leader"
+  );
+
+  const isETL = currentUser?.attributes.ssj ? true : false;
+
+  let showActions = true;
+
+  // if (isOperationsGuide) {
+  //   if (
+  //     // is a teacher leader, who is looking at their own checklist
+  //     isTL &&
+  //     router.pathname.startsWith("/open-school/") &&
+  //     currentUser.attributes.schools[0].workflowId === workflow
+  //   ) {
+  //     showActions = true;
+  //   } else if (
+  //     // is an emerging teacher leader, who is looking at their SSJ
+  //     isETL &&
+  //     router.pathname.startsWith("/ssj/") &&
+  //     currentUser.attributes.ssj.workflowId === workflow
+  //   ) {
+  //     showActions = true;
+  //   } else {
+  //     // is simply an ops guide looking at a school
+  //     showActions = false;
+  //   }
+  // } else {
+  //   showActions = true;
+  // }
+
+  return (
+    <CustomDrawer anchor="right" open={open} onClose={toggle}>
+      <StyledInfoCard noBorder noRadius>
+        <Stack spacing={screenSize.isSm ? 6 : 12}>
+          <Stack spacing={6}>
+            <Grid container justifyContent="space-between" alignItems="center">
+              <Grid item>
+                <Chip
+                  label={
+                    isDecision
+                      ? t("ssj_ui_content.decision")
+                      : taskId
+                      ? t("ssj_ui_content.task")
+                      : t("ssj_ui_content.milestone")
+                  }
+                  size="small"
+                />
+              </Grid>
+              <Grid item>
+                <IconButton onClick={toggle} id="info-drawer-close">
+                  <Icon type="close" />
+                </IconButton>
+              </Grid>
+            </Grid>
+
+            <Typography variant="bodyLarge" bold>
+              {title}
+            </Typography>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={4}>
+              {taskId && (
+                <Stack spacing={2}>
+                  <Typography
+                    variant="bodyMini"
+                    lightened
+                    bold
+                    uppercase
+                    data-cy="assignee-label"
+                  >
+                    {t("ssj_ui_content.assignee")}
+                  </Typography>
+                  <AssigneeRoster
+                    handleAssignUser={handleAssignUser}
+                    handleUnassignUser={handleUnassignUser}
+                    assignableUsers={
+                      Array.isArray(assignableUsers) ? assignableUsers : []
+                    }
+                    assignees={assignees}
+                    completers={completers}
+                    completionType={completionType}
+                    dataCy={`assign-user-button-drawer-${title}`}
+                  />
+                </Stack>
+              )}
+              {status && (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.status")}
+                  </Typography>
+                  <div>
+                    <StatusChip status={status} size="small" withIcon />
+                  </div>
+                </Stack>
+              )}
+              {categories?.length ? (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.category")}
+                  </Typography>
+                  <Stack direction="row" spacing={2}>
+                    {categories.map((m, i) => (
+                      <CategoryChip category={m} size="small" key={i} />
+                    ))}
+                  </Stack>
+                </Stack>
+              ) : null}
+              {worktime ? (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.worktime")}
+                  </Typography>
+                  <Stack direction="row">
+                    <WorktimeChip size="small" worktime={worktime} withIcon />
+                  </Stack>
+                </Stack>
+              ) : null}
+              {processName && screenSize.isSm && (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.milestone")}
+                  </Typography>
+                  <Stack direction="row">
+                    <Chip label={processName} size="small" />
+                  </Stack>
+                </Stack>
+              )}
+            </Stack>
+          </Stack>
+          {about && (
+            <Stack spacing={4}>
+              <Stack direction="row" spacing={4}>
+                <Icon type="glasses" variant="primary" size="medium" />
+                <Typography variant="bodyRegular" bold>
+                  {t("ssj_ui_content.about")}
+                </Typography>
+              </Stack>
+              <Divider />
+              <Typography>{about}</Typography>
+            </Stack>
+          )}
+          {resources && resources.length ? (
+            <Stack spacing={2}>
+              {resources.map((r, i) => (
+                <Resource
+                  link={r.attributes.link}
+                  // title={r.attributes.title}
+                  title={
+                    r.attributes[getTranslatedAttr(router.locale, "title")] ||
+                    r.attributes.title
+                  }
+                  key={r.id}
+                />
+              ))}
+            </Stack>
+          ) : null}
+        </Stack>
+      </StyledInfoCard>
+
+      {showActions ? (
+        <ActionsContainer noBorder noPadding noRadius>
+          {actions}
+        </ActionsContainer>
+      ) : null}
+    </CustomDrawer>
+  );
+};
+
+export default InfoDrawer;
+
+const AvatarWrapper = ({ badgeContent, src }) => {
+  return (
+    <div>
+      <Badge
+        badgeContent={badgeContent}
+        overlap="circular"
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+      >
+        <Avatar
+          size="mini"
+          // TODO: can we get the assignee information for each task in the process serializer
+          src={src}
+        />
+      </Badge>
+    </div>
+  );
+};

@@ -1,0 +1,72 @@
+import { Skeleton } from "@mui/material";
+import { Typography, Stack } from "@ui";
+
+import CategoryChip from "@components/CategoryChip";
+import StatusChip from "@components/StatusChip";
+
+import { useTranslation } from "next-i18next";
+
+const MilestonePageHead = ({
+  isLoading,
+  title,
+  description,
+  status,
+  categories,
+}) => {
+  const { t } = useTranslation("common");
+  return (
+    <>
+      {isLoading ? (
+        <Stack spacing={8}>
+          <Skeleton height={64} width={320} m={0} />
+          <Stack spacing={2}>
+            <Skeleton height={24} m={0} />
+            <Skeleton height={24} m={0} />
+            <Skeleton height={24} m={0} />
+          </Stack>
+        </Stack>
+      ) : (
+        <>
+          <Stack spacing={8}>
+            <Typography variant="h2" bold capitalize>
+              {title}
+            </Typography>
+            {description ? (
+              <Typography variant="bodyLarge" lightened>
+                {description}
+              </Typography>
+            ) : null}
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={4}
+              alignItems={{ xs: "flex-start", sm: "center" }}
+            >
+              {status ? (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.status")}
+                  </Typography>
+                  <StatusChip status={status} size="small" withIcon />
+                </Stack>
+              ) : null}
+              {categories?.length ? (
+                <Stack spacing={2}>
+                  <Typography variant="bodyMini" lightened bold uppercase>
+                    {t("ssj_ui_content.category")}
+                  </Typography>
+                  <Stack direction="row" spacing={2}>
+                    {categories.map((m, i) => (
+                      <CategoryChip category={m} size="small" key={i} />
+                    ))}
+                  </Stack>
+                </Stack>
+              ) : null}
+            </Stack>
+          </Stack>
+        </>
+      )}
+    </>
+  );
+};
+
+export default MilestonePageHead;

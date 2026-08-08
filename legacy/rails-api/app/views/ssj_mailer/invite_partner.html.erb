@@ -1,0 +1,15 @@
+<p>
+Dear <%= @user.first_name %>,
+</p>
+<p>
+<%= @inviter.name %> has invited you to join them on the Wildflower School Startup Journey.
+</p>
+<p>
+As a next step, we invite you to join <b><%= ENV['APP_NAME'] %></b>, a platform that provides shared access to Wildflower’s School Startup Journey guide and resources. Please <%= link_to "click here", @invite_url %> to activate your account and begin your journey!
+</p>
+<p>
+<br/>
+Warmly,
+<br/>
+Wildflower Support
+</p>
