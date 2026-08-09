@@ -23,20 +23,33 @@ async function findSchool(db: SupabaseClient, externalId: string): Promise<Schoo
   return data as SchoolRow;
 }
 
-/** People currently related to a school, as `included` resources. */
+/**
+ * People currently related to a school, as `included` resources. The Rails
+ * schema declares no foreign key from school_relationships to people, so
+ * PostgREST cannot embed them and they are fetched by id.
+ */
 async function relatedPeople(db: SupabaseClient, schoolId: number): Promise<Resource[]> {
-  const { data, error } = await db
+  const { data: relationships, error } = await db
     .from("school_relationships")
-    .select("people ( * )")
+    .select("person_id")
     .eq("school_id", schoolId)
     .is("deleted_at", null)
     .is("end_date", null);
   if (error) throw new Error(error.message);
 
-  return (data ?? [])
-    .map((row) => (row as unknown as { people: PersonRow | null }).people)
-    .filter((person): person is PersonRow => Boolean(person))
-    .map(serializePersonBasic);
+  const personIds = (relationships ?? [])
+    .map((row) => (row as { person_id: number | null }).person_id)
+    .filter((id): id is number => id !== null);
+  if (personIds.length === 0) return [];
+
+  const { data: people, error: peopleError } = await db
+    .from("people")
+    .select("*")
+    .in("id", personIds)
+    .is("deleted_at", null);
+  if (peopleError) throw new Error(peopleError.message);
+
+  return ((people ?? []) as PersonRow[]).map(serializePersonBasic);
 }
 
 export async function GET(request: Request, ctx: RouteContext<"/api/v1/schools/[id]">) {
