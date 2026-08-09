@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ApiError, errorResponse } from "@/lib/auth";
-import { anonClient, serviceClient } from "@/lib/supabase";
+import { anonClient } from "@/lib/supabase";
+import { userDocument } from "@/lib/users";
 
 const credentials = z.object({
   user: z.object({ email: z.string().email(), password: z.string() }),
@@ -20,25 +21,12 @@ export async function POST(request: Request) {
     const { data, error } = await anonClient().auth.signInWithPassword({ email, password });
     if (error || !data.session) throw new ApiError(401, "Invalid email or password");
 
-    const { data: person } = await serviceClient()
-      .from("people")
-      .select("external_identifier, first_name, last_name, is_admin")
-      .eq("user_id", data.user.id)
-      .maybeSingle();
+    const { data: userData, included } = await userDocument(data.user.id, data.user.email ?? null);
 
     return Response.json(
       {
-        data: {
-          id: person?.external_identifier ?? data.user.id,
-          type: "user",
-          attributes: {
-            email: data.user.email,
-            firstName: person?.first_name ?? null,
-            lastName: person?.last_name ?? null,
-            isAdmin: person?.is_admin ?? false,
-            personId: person?.external_identifier ?? null,
-          },
-        },
+        data: userData,
+        included,
         token: data.session.access_token,
         refreshToken: data.session.refresh_token,
       },
