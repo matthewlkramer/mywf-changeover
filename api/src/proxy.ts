@@ -12,14 +12,21 @@ const ALLOWED_ORIGINS = [
   /^https:\/\/(my|my-dev|my-staging|platform|platform-dev|platform-staging)\.wildflowerschools\.org$/,
 ];
 
-function corsHeaders(origin: string | null): Headers {
+function corsHeaders(request: NextRequest): Headers {
+  const origin = request.headers.get("origin");
   const headers = new Headers();
   if (!origin || !ALLOWED_ORIGINS.some((pattern) => pattern.test(origin))) return headers;
 
   headers.set("Access-Control-Allow-Origin", origin);
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
-  headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+  // The frontend's axios clients send a fixed set of headers that includes the
+  // CORS response headers themselves, so the request list is reflected back the
+  // way rack-cors' `headers: :any` did rather than allow-listed.
+  headers.set(
+    "Access-Control-Allow-Headers",
+    request.headers.get("access-control-request-headers") ?? "Authorization, Content-Type, Accept",
+  );
   headers.set("Access-Control-Expose-Headers", "Authorization");
   headers.set("Access-Control-Max-Age", "86400");
   headers.set("Vary", "Origin");
@@ -27,7 +34,7 @@ function corsHeaders(origin: string | null): Headers {
 }
 
 export function proxy(request: NextRequest) {
-  const headers = corsHeaders(request.headers.get("origin"));
+  const headers = corsHeaders(request);
 
   if (request.method === "OPTIONS") {
     return new NextResponse(null, { status: 204, headers });
